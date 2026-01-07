@@ -1,2 +1,2 @@
-# cough-machine-piv
+# tcm-velocimetry
 Twente Cough Machine - Particle Image Velocimetry
