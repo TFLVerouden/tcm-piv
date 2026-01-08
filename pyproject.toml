@@ -16,5 +16,5 @@ dependencies = [
 	"scikit-image",
 	"tqdm",
 	"natsort",
-	"tcm-utils",
+	"tcm-utils" # currently errors on pip install, install manually from local folder
 ]

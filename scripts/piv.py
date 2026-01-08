@@ -63,7 +63,8 @@ var_names = [[], ['disp1_unf', 'int1_unf', 'disp1_glo', 'disp1_nbs',
 
 # In the current directory, create a folder for processed data
 # named the same as the final part of the data_path
-proc_path = piv.init_subfolder(current_dir, 'processed', meas_series, meas_name, debug=debug)
+proc_path = piv.init_subfolder(
+    current_dir, 'processed', meas_series, meas_name, debug=debug)
 
 # Create a data subfolder for npz files
 data_proc_path = piv.init_subfolder(proc_path, 'data', debug=debug)
