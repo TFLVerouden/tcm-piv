@@ -1,6 +1,6 @@
-import getpass
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -11,6 +11,9 @@ import tcm_piv as piv
 
 from tcm_utils.cvd_check import set_cvd_friendly_colors
 from tcm_utils.cough_model import CoughModel
+from tcm_utils.camera_calibration import run_calibration
+from tcm_utils.io_utils import load_json_key
+from tcm_utils.file_dialogs import ask_directory
 
 print("\n\nStarting PIV analysis...")
 
@@ -22,20 +25,12 @@ debug = False
 videos = True
 random_profiles = True
 new_bckp = False
-meas_series = 'PIV250723'
-meas_name = 'PIV_1bar_80ms_refill'
-cal_name = 'calibration_PIV_500micron_2025_07_23_C001H001S0001'
 frames = list(range(500, 800)) if debug else "all"
 dt = 1 / 40000  # [s]
 depth = 0.01  # [m] Depth of the channel
 
 # Set calibration parameters
-cal_spacing = 0.0005  # [m] Calibration grid spacing
-cal_roi = [45, 825, 225, 384]  # [px] Region of interest for calibration
-cal_init_grid = (7, 5)  # Initial grid size for calibration
-cal_bin_thr = 200  # Binarization threshold for calibration
-cal_blur_ker = (5, 5)  # Blur kernel size for calibration
-cal_open_ker = (3, 3)  # Opening kernel size for calibration
+cal_spacing = 0.001  # [m] Calibration grid spacing
 
 # Set cough model parameters
 model_gender = "male"
@@ -49,40 +44,89 @@ run_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 current_dir = os.path.dirname(os.path.abspath(__file__))
 cal_path = os.path.join(current_dir, "calibration")
 
-user = getpass.getuser()
-if user == "tommieverouden":
-    # data_path = os.path.join("/Volumes/Data/Data/250623 PIV/", meas_name)
-    data_path = os.path.join(
-        '/Users/tommieverouden/Documents/Current data', meas_series, meas_name)
-elif user == "sikke":
-    data_path = os.path.join('D:\\Experiments\\PIV\\', meas_series, meas_name)
+
+def _load_calibration_from_metadata(cal_dir: Path, cal_name: str):
+    """Return (res_avg_m_per_px, frame_height_m, metadata_path) if available."""
+    pattern = f"{cal_name}_*_metadata.json"
+    metadata_files = sorted(
+        cal_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    for meta_path in metadata_files:
+        calibration_meta = load_json_key(meta_path, "calibration")
+        if not calibration_meta:
+            continue
+        mm_per_px = calibration_meta.get("scale_mm_per_px")
+        image_size = calibration_meta.get("image_size_px", {})
+        height_px = image_size.get("height")
+        if mm_per_px is None or height_px is None:
+            continue
+        res_avg = float(mm_per_px) / 1000.0  # m/px
+        # height in meters (matches prior usage)
+        frame_h = float(height_px) * res_avg
+        return res_avg, frame_h, meta_path
+    return None, None, None
+
+
+# Let the user pick the dataset directory
+default_data_root = Path.home() / "Documents" / "Data"
+if not default_data_root.exists():
+    default_data_root = Path(current_dir)
+
+selected_dir = ask_directory(
+    key="piv_data_dir",
+    title="Select PIV dataset directory",
+    default_dir=default_data_root,
+    start=Path(__file__),
+)
+if selected_dir is None:
+    raise SystemExit("No data directory selected. Exiting.")
+
+data_path = Path(selected_dir)
+
 print(f"data_path: {data_path}")
 # Data saving settings
 var_names = [[], ['disp1_unf', 'int1_unf', 'disp1_glo', 'disp1_nbs',
                   'disp1', 'time'], ['disp2_unf', 'int2_unf', 'win_pos2', 'disp2_glo', 'disp2'], ['disp3_unf', 'int3_unf', 'win_pos3', 'disp3_glo', 'disp3']]
 
-# In the current directory, create a folder for processed data
-# named the same as the final part of the data_path
-proc_path = piv.init_subfolder(
-    current_dir, 'processed', meas_series, meas_name, debug=debug)
+# Ask user where to store outputs (defaults to current script directory)
+default_output_root = Path(current_dir)
+chosen_output_root = ask_directory(
+    key="piv_output",
+    title="Select output directory for PIV results",
+    default_dir=default_output_root,
+    start=Path(__file__),
+)
+output_root = Path(
+    chosen_output_root) if chosen_output_root else default_output_root
 
-# Create a data subfolder for npz files
-data_proc_path = piv.init_subfolder(proc_path, 'data', debug=debug)
+# Ensure output directory exists and use it directly for outputs/backups
+output_root.mkdir(parents=True, exist_ok=True)
+proc_path = output_root
+data_proc_path = output_root
 
 # Read or create calibration data
-data_cal = piv.load_backup(cal_path, cal_name)
-if data_cal:
-    res_avg = data_cal.get('resolution_avg_m_per_px')
-    frame_w = data_cal.get('frame_size_m')[0]  # Already in meters
+res_avg, frame_w, metadata_path = _load_calibration_from_metadata(
+    data_path, cal_name)
+if res_avg is None:
+    print("No calibration metadata found; running camera calibration...")
+    exit_code = run_calibration(
+        input_path=cal_im_path,
+        distance_mm=cal_spacing * 1000.0,
+        output_dir=cal_dir,
+    )
+    if exit_code != 0:
+        sys.exit(exit_code)
+    res_avg, frame_w, metadata_path = _load_calibration_from_metadata(
+        cal_dir, cal_name)
+    if res_avg is None:
+        raise RuntimeError(
+            "Calibration failed: metadata not found after running calibration.")
 else:
-    cal_im_path = os.path.join(cal_path, f"{cal_name}.tif")
-    res_avg, _, frame_size = piv.calibrate_grid(cal_im_path, cal_spacing, roi=cal_roi, init_grid=cal_init_grid,
-                                                binary_thr=cal_bin_thr, blur_ker=cal_blur_ker, open_ker=cal_open_ker, save=True, plot=True)
-    frame_w = frame_size[0]  # Width in meters
+    print(f"Loaded calibration metadata from {metadata_path.name}")
 
 # Count number of frames to be used
 if frames == "all":
-    nr_frames = piv.read_imgs(data_path, "all", format='tif',
+    nr_frames = piv.read_imgs(str(data_path), "all", format='tif',
                               lead_0=5, only_count=True, timing=False)
     frames = list(range(1, nr_frames + 1))
 
@@ -111,7 +155,7 @@ else:
 
     # LOADING & CORRELATION
     # Load images from disk
-    imgs = piv.read_imgs(data_path, frames, format='tif', lead_0=5,
+    imgs = piv.read_imgs(str(data_path), frames, format='tif', lead_0=5,
                          timing=True)
 
     # TODO: Pre-processing images would happen here
@@ -161,7 +205,7 @@ piv.plot_vel_comp(disp1_glo, disp1_nbs, disp1, res_avg, frames,
                   dt, ylim=(v_max1[0] * -1.1, v_max1[1] * 1.1),
                   disp_rejected=disp1_unf,
                   proc_path=proc_path, file_name="pass1_v-t",
-                  title=f'First pass - {meas_name}', test_mode=debug)
+                  title='First pass', test_mode=debug)
 
 
 # SECOND PASS: Split in 8 windows ==============================================
@@ -189,7 +233,7 @@ else:
     # LOADING & CORRELATION
     # Ensure we have the images loaded
     if 'imgs' not in globals():
-        imgs = piv.read_imgs(data_path, frames, format='tif', lead_0=5,
+        imgs = piv.read_imgs(str(data_path), frames, format='tif', lead_0=5,
                              timing=True)
 
     # Convert displacements from pass 1 to shifts for pass 2
@@ -239,7 +283,7 @@ piv.save_backup(data_proc_path, "pass2.npz", test_mode=debug,
 # Plot the median, min and max velocity in time
 piv.plot_vel_med(disp2, res_avg, frames, dt,
                  ylim=(v_max2[0] * -1.1, v_max2[1] * 1.1),
-                 title=f'Second pass - {meas_name}',
+                 title='Second pass',
                  proc_path=proc_path, file_name="pass2_v-t_med", test_mode=debug)
 
 # Plot some randomly selected velocity profiles
@@ -285,7 +329,7 @@ else:
     # LOADING & CORRELATION
     # Ensure we have the images loaded
     if 'imgs' not in globals():
-        imgs = piv.read_imgs(data_path, frames, format='tif', lead_0=5,
+        imgs = piv.read_imgs(str(data_path), frames, format='tif', lead_0=5,
                              timing=True)
 
     # Convert displacements from pass 2 to shifts for pass 3
@@ -335,7 +379,7 @@ piv.save_backup(data_proc_path, "pass3.npz", test_mode=debug,
 # PLOTTING
 piv.plot_vel_med(disp3_nbs, res_avg, frames, dt,
                  ylim=(v_max3[0] * -1.1, v_max3[1] * 1.1),
-                 title=f'Third pass - {meas_name}', proc_path=proc_path, file_name="pass3_v-t_med", test_mode=debug)
+                 title='Third pass', proc_path=proc_path, file_name="pass3_v-t_med", test_mode=debug)
 
 piv.plot_vel_prof(disp3_nbs, res_avg, frames, dt, win_pos3,
                   mode='average', avg_start_time=0.030, avg_end_time=0.120,
@@ -378,7 +422,7 @@ time_model, q_model = CoughModel.from_gupta(
 
 # Plot flow rate in time, save to file
 piv.plot_flow_rate(q, frames, dt, q_model=q_model, t_model=time_model, ylim=(0, np.nanmax(q) * 1100),
-                   title=f'Flow rate - {meas_name}',
+                   title='Flow rate',
                    proc_path=proc_path, file_name="flow_rate", frame_skip=40, plot_model=False,
                    test_mode=debug)
 piv.save_backup(data_proc_path, "flow_rate.npz", test_mode=debug,
@@ -386,7 +430,7 @@ piv.save_backup(data_proc_path, "flow_rate.npz", test_mode=debug,
 
 # Save all parameters to a backup file
 piv.save_backup(proc_path, "params.npz", test_mode=debug,
-                date_saved=run_date, meas_series=meas_series, meas_name=meas_name,
+                date_saved=run_date, data_path=str(data_path), selected_dir=str(selected_dir),
                 cal_name=cal_name, dt=dt, frames_start=frames[0], frames_end=frames[-1], res_avg=res_avg)
 
 

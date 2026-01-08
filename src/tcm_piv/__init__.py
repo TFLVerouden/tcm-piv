@@ -3,14 +3,11 @@ PIV Functions Module
 
 A collection of functions for Particle Image Velocimetry (PIV) analysis of cough machine images.
 Provides functions for image processing, cross-correlation, displacement
-calculation, data filtering, calibration, and visualization.
+calculation, data filtering, and visualization.
 
 Usage:
     import tcm_piv as piv
-    
-    # Camera calibration
-    res_avg, res_std = piv.calibrate_grid(cal_path, spacing)
-    
+
     # Read images
     imgs = piv.read_imgs(data_path, frame_numbers)
     
@@ -37,7 +34,6 @@ from .postprocessing import (
     filter_outliers, filter_neighbours, first_valid, strip_peaks, smooth)
 from .plotting import plot_vel_comp, plot_vel_med, plot_vel_prof, plot_flow_rate
 from .utils import cart2polar, get_time, disp2shift, vel2flow
-from .calibration import calibrate_grid, all_distances
 
 __all__ = [
     # I/O functions
@@ -63,9 +59,6 @@ __all__ = [
     'cart2polar', 'get_time', 'disp2shift', 'vel2flow',
 
 
-    # Calibration functions
-    'calibrate_grid', 'all_distances',
-
 ]
 
 # Module-level documentation
@@ -83,7 +76,6 @@ Velocimetry (PIV) analysis, organized into logical submodules:
 - postprocessing: Data filtering, validation, and smoothing
 - plotting: Visualization and analysis plots
 - utils: General utility functions
-- calibration: Camera calibration and resolution determination
 
 The module is designed to support the complete PIV workflow from camera
 calibration through raw image processing to final velocity field analysis 
