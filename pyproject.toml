@@ -16,4 +16,5 @@ dependencies = [
 	"scikit-image",
 	"tqdm",
 	"natsort",
+	"tcm-utils",
 ]

@@ -10,6 +10,7 @@ from datetime import datetime
 import tcm_piv as piv
 
 from tcm_utils.cvd_check import set_cvd_friendly_colors
+from tcm_utils.cough_model import CoughModel
 
 print("\n\nStarting PIV analysis...")
 
@@ -369,8 +370,10 @@ piv.plot_vel_prof(disp3_nbs, res_avg, frames, dt, win_pos3,
 # Calculate flow rate
 q = piv.vel2flow(disp3_nbs, depth, frame_w)
 
-# Import Gupta model data
-q_model, time_model = piv.Gupta_model(model_gender, model_mass, model_height)
+# Import Gupta model data using shared cough model utilities
+time_model, q_model = CoughModel.from_gupta(
+    gender=model_gender, weight_kg=model_mass, height_m=model_height
+).flow(units="L/s")
 
 # Plot flow rate in time, save to file
 piv.plot_flow_rate(q, frames, dt, q_model=q_model, t_model=time_model, ylim=(0, np.nanmax(q) * 1100),

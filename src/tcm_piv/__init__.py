@@ -38,7 +38,6 @@ from .postprocessing import (
 from .plotting import plot_vel_comp, plot_vel_med, plot_vel_prof, plot_flow_rate
 from .utils import cart2polar, get_time, disp2shift, vel2flow
 from .calibration import calibrate_grid, all_distances
-from .modelling import Gupta_model
 
 __all__ = [
     # I/O functions
@@ -61,13 +60,12 @@ __all__ = [
     'plot_vel_comp', 'plot_vel_med', 'plot_vel_prof', 'plot_flow_rate',
 
     # Utility functions
-    'cart2polar', 'get_time', 'disp2shift', 'vel2flow', 'Gupta_model',
+    'cart2polar', 'get_time', 'disp2shift', 'vel2flow',
+
 
     # Calibration functions
     'calibrate_grid', 'all_distances',
 
-    # Modelling functions
-    'Gupta_model'
 ]
 
 # Module-level documentation
