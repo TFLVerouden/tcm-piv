@@ -28,4 +28,7 @@ output_root = repo_root / "examples" / "two_frames" / "output"
 output_root.mkdir(parents=True, exist_ok=True)
 
 # Handle calibration
-calibration_metadata_path = ensure_calibration_metadata()
+calibration_metadata_path = ensure_calibration_metadata(
+    input_path=data_root, distance_mm=1.0, output_dir=data_root)
+calibration = load_json_key(calibration_metadata_path, "calibration")
+print(f"Using calibration scale: {calibration['scale_mm_per_px']:.4f} mm/px")
