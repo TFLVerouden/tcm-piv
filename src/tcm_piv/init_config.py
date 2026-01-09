@@ -13,13 +13,16 @@ import shutil
 import configparser
 from pathlib import Path
 import sys
-from natsort import natsorted
+
 import numpy as np
-from tcm_utils.file_dialogs import ask_open_file
-from tcm_utils.read_cihx import ensure_cihx_processed, extract_cihx_metadata, load_cihx_metadata
-from tcm_utils.io_utils import ensure_path
+import tifffile
+from natsort import natsorted
 from tcm_utils.camera_calibration import ensure_calibration
+from tcm_utils.file_dialogs import ask_open_file
+from tcm_utils.io_utils import ensure_path, load_images, prompt_yes_no
+from tcm_utils.read_cihx import ensure_cihx_processed, load_cihx_metadata
 from tcm_utils.time_utils import timestamp_str
+from tcm_piv.preprocessing import crop, generate_background
 
 # Default placeholder values for configuration parameters
 
@@ -31,6 +34,8 @@ FRAMES_TO_USE = 'all'
 
 # [Preprocessing]
 DOWNSAMPLE_FACTOR = 1
+BACKGROUND_DIR = ""
+CROP_ROI = (0, 0, 0, 0)  # (y_start, y_end, x_start, x_end)
 
 # [Correlation]
 
@@ -132,9 +137,19 @@ def read_file(config_file: Path | str | None) -> None:
         _get_cfg(parser, cat, 'downsample_factor',
                  fallback=str(DOWNSAMPLE_FACTOR))
     )
-    BACKGROUND_DIR = _get_cfg(parser, cat, 'background_dir',
-                              fallback=BACKGROUND_DIR)
-    CROP_ROI = _get_cfg(parser, cat, 'crop_roi', fallback=CROP_ROI)
+    BACKGROUND_DIR = _get_cfg(parser, cat, 'background_dir')
+    CROP_ROI = _parse_crop_roi(
+        _get_cfg(parser, cat, 'crop_roi', fallback=_stringify(CROP_ROI)),
+        default=CROP_ROI,
+    )
+
+    if not BACKGROUND_DIR:
+        BACKGROUND_DIR = _maybe_generate_background(
+            image_paths=IMAGE_LIST,
+            output_dir=Path(OUTPUT_DIR),
+            crop_roi=CROP_ROI,
+            image_count=N_IMAGES,
+        )
 
     # Additional sections can be added here following the same pattern
 
@@ -300,6 +315,63 @@ def _build_updated_snapshot(original_snapshot: dict[str, dict[str, str]]) -> dic
 
     return _snapshot_parser(updated_parser)
 
+
+def _parse_crop_roi(value, default: tuple[int, int, int, int] = (0, -1, 0, -1)) -> tuple[int, int, int, int]:
+    """Parse crop ROI from config value into a 4-tuple of ints."""
+
+    if isinstance(value, (list, tuple, np.ndarray)) and len(value) == 4:
+        try:
+            return tuple(int(v) for v in value)  # type: ignore[return-value]
+        except (TypeError, ValueError):
+            return default
+
+    if isinstance(value, str):
+        cleaned = value.strip().strip("()[]")
+        if cleaned:
+            parts = [p.strip() for p in cleaned.split(',') if p.strip()]
+            if len(parts) == 4:
+                try:
+                    # type: ignore[return-value]
+                    return tuple(int(p) for p in parts)
+                except ValueError:
+                    return default
+
+    return default
+
+
+def _maybe_generate_background(
+    *,
+    image_paths: list[str],
+    output_dir: Path,
+    crop_roi: tuple[int, int, int, int],
+    image_count: int,
+) -> str:
+    """Optionally generate, crop, and save a background image."""
+
+    if image_count > 100:
+        print(
+            f"Warning: generating a background from {image_count} images may take some time.")
+
+    if not prompt_yes_no("No background provided. Generate one now? [y/N]: "):
+        print("Skipping background generation.")
+        return ""
+
+    print("Loading images to compute background...")
+    imgs = load_images(image_paths, show_progress=True)
+    background = generate_background(imgs)
+
+    try:
+        cropped_bg = crop(background, crop_roi)
+    except ValueError as exc:
+        print(
+            f"Invalid crop ROI {crop_roi}; saving uncropped background. ({exc})")
+        cropped_bg = background
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"background_{timestamp_str()}.tif"
+    tifffile.imwrite(output_path, cropped_bg)
+    print(f"Background saved to {output_path}")
+    return str(output_path)
 
 if __name__ == "__main__":
     # For testing purposes, read a sample config file
