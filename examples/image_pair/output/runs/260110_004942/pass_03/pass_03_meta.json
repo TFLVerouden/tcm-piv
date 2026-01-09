@@ -1,0 +1,33 @@
+{
+  "corrs_to_sum": 1,
+  "downsample_factor": 1,
+  "files": {
+    "pairs": "../pairs.csv",
+    "post": "pass_03_post.csv",
+    "unfiltered": "pass_03_unfiltered.csv.gz",
+    "win_pos": "pass_03_win_pos.csv"
+  },
+  "max_velocity_vx_vy_m_s": [
+    150.0,
+    150.0
+  ],
+  "min_peak_distance": 5,
+  "n_pairs": 1,
+  "n_windows": [
+    1,
+    16
+  ],
+  "neighbourhood_size": [
+    1,
+    1,
+    1
+  ],
+  "neighbourhood_threshold": [
+    4,
+    6
+  ],
+  "nr_peaks": 2,
+  "pass": 3,
+  "time_smoothing_lambda": 0.0,
+  "window_overlap": 0.0
+}

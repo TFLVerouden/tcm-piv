@@ -1,0 +1,38 @@
+nr_passes = 3
+
+[source]
+image_dir = "examples/image_pair/input"
+output_dir = "examples/image_pair/output"
+frames_to_use = "all"
+extra_vel_dim_m = 0.01
+
+[camera]
+camera_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/image_pair/input/test_P-001_20260107_173921_260107_174151_metadata.json"
+calib_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/image_pair/output/calibration/calibration_image_260108_141319_metadata.json"
+calib_spacing_mm = 1.0
+
+[preprocessing]
+downsample_factor = [4, 1, 1]
+background_dir = "examples/image_pair/output/background_260110_003815.tif"
+crop_roi = [0, 0, 0, 0]
+
+[correlation]
+corrs_to_sum = [1, 1, 1]
+nr_windows = [[1, 1], [1, 8], [1, 16]]
+window_overlap = [0.0, 0.2, 0.0]
+
+[displacement]
+nr_peaks = [5, 5, 2]
+min_peak_distance = [5, 5, 5]
+
+[postprocessing]
+max_velocity = [[150.0, 150.0], [150.0, 150.0], [150.0, 150.0]]
+neighbourhood_size = [[1, 1, 1], [1, 1, 1], [1, 1, 1]]
+neighbourhood_threshold = [1, 5, [4, 6]]
+time_smoothing_lambda = [4e-07, 0.0, 0.0]
+
+[visualisation]
+plot_model = true
+model_gender = "male"
+model_mass = 70.0
+model_height = 1.93

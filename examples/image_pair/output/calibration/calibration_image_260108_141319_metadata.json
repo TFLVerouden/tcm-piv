@@ -1,0 +1,33 @@
+{
+  "timestamp": "260108_141319",
+  "timestamp_source": "file_creation_time",
+  "analysis_run_time": "260110_003811",
+  "input_file_original": "/Users/tommieverouden/Developer/tcm-utils/examples/calibration_demo/raw_data/calibration_image.tif",
+  "raw_data_path": "examples/image_pair/output/calibration/raw_data/calibration_image.tif",
+  "output_files": {
+    "plot_pdf": "examples/image_pair/output/calibration/calibration_image_260108_141319_calibration_plot.pdf",
+    "calibration_csv": "examples/image_pair/output/calibration/calibration_image_260108_141319_calibration.csv"
+  },
+  "calibration": {
+    "rows": 25,
+    "cols": 26,
+    "roi": {
+      "x": 209,
+      "y": 181,
+      "width": 869,
+      "height": 826
+    },
+    "spacing_px": 32.68106995884773,
+    "scale_mm_per_px": 0.030598753384121394,
+    "scale_m_per_px": 3.059875338412139e-05,
+    "distance_mm_input": 1.0,
+    "image_size_px": {
+      "width": 1280,
+      "height": 1024
+    },
+    "image_size_m": {
+      "width": 0.039166404331675383,
+      "height": 0.031333123465340305
+    }
+  }
+}

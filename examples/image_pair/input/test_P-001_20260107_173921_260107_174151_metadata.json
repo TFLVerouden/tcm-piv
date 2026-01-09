@@ -2,8 +2,8 @@
   "timestamp": "260107_174151",
   "timestamp_save": "260108_115926",
   "timestamp_source": "camera_metadata",
-  "analysis_run_time": "260109_200811",
-  "input_file_original": "examples/two_frames/input/test_P-001_20260107_173921.cihx",
+  "analysis_run_time": "260110_004604",
+  "input_file_original": "examples/image_pair/input/test_P-001_20260107_173921.cihx",
   "camera_metadata": {
     "date": "2026/1/7",
     "time": "17:41:51",
@@ -737,5 +737,5 @@
       }
     }
   },
-  "raw_data_path": "examples/two_frames/output/camera_metadata/raw_data/test_P-001_20260107_173921.cihx"
+  "raw_data_path": "examples/image_pair/output/camera_metadata/raw_data/test_P-001_20260107_173921.cihx"
 }
