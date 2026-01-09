@@ -9,6 +9,7 @@ Namespace `cfg` now contains all user settings
 """
 
 import os
+import shutil
 import configparser
 from pathlib import Path
 import sys
@@ -18,19 +19,18 @@ from tcm_utils.file_dialogs import ask_open_file
 from tcm_utils.read_cihx import ensure_cihx_processed, extract_cihx_metadata, load_cihx_metadata
 from tcm_utils.io_utils import ensure_path
 from tcm_utils.camera_calibration import ensure_calibration
+from tcm_utils.time_utils import timestamp_str
 
 # Default placeholder values for configuration parameters
-# FIXME
+
 
 # [Source]
-IMAGE_DIR = ""
-CAMERA_DIR = ""
-CALIB_DIR = ""
-OUTPUT_DIR = ""
-FRAMES_TO_USE = "all"
+FRAMES_TO_USE = 'all'
+
+# [Camera]
 
 # [Preprocessing]
-CALIB_SPACING_MM = 1.0
+DOWNSAMPLE_FACTOR = 1
 
 # [Correlation]
 
@@ -43,14 +43,16 @@ CALIB_SPACING_MM = 1.0
 # [Visualisation]
 
 
-def read_file(config_file: Path) -> None:
+def read_file(config_file: Path | str | None) -> None:
     """Reads a configuration file and sets module-level variables accordingly.
 
     Parameters:
-        config_file (Path): Path to the configuration file.
+        config_file (Path | str | None): Path to the configuration file.
     """
+    config_path = Path(config_file) if config_file else None
+
     # If no config file provided, ask user to select one
-    if not config_file or not os.path.isfile(config_file):
+    if not config_path or not config_path.is_file():
         print("No configuration file provided or file does not exist.")
         print("Please select a configuration file.")
         selected_path = ask_open_file(
@@ -62,21 +64,22 @@ def read_file(config_file: Path) -> None:
             print("WARNING: No configuration file selected. Using default parameters.")
             return
 
-        config_file = selected_path
+        config_path = Path(selected_path)
 
-    print(f"Reading configuration from: {config_file}.")
+    print(f"Reading configuration from: {config_path}.")
     parser = configparser.ConfigParser()
-    parser.read(config_file)
+    parser.read(config_path)
+    original_snapshot = _snapshot_parser(parser)
 
     # [Source] =================================================================
     global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, N_IMAGES
-    category = 'Source'
+    cat = 'Source'
 
     # Get vars from config file or use defaults
-    IMAGE_DIR = parser.get(category, 'image_dir', fallback=IMAGE_DIR)
-    OUTPUT_DIR = parser.get(category, 'output_dir', fallback=OUTPUT_DIR)
-    FRAMES_TO_USE = parser.get(
-        category, 'frames_to_use', fallback=FRAMES_TO_USE)
+    IMAGE_DIR = _get_cfg(parser, cat, 'image_dir')
+    OUTPUT_DIR = _get_cfg(parser, cat, 'output_dir')
+    FRAMES_TO_USE = _get_cfg(parser, cat, 'frames_to_use',
+                             fallback=FRAMES_TO_USE)
 
     # Ensure paths are valid, prompt user if necessary
     IMAGE_DIR = ensure_path(IMAGE_DIR, 'image_dir',
@@ -95,18 +98,18 @@ def read_file(config_file: Path) -> None:
 
     # [Camera] =================================================================
     global CAMERA_DIR, CALIB_DIR, CALIB_SPACING_MM, TIMESTAMP, FRAMERATE_HZ, SHUTTERSPEED_NS, RESOLUTION_X_PX, RESOLUTION_Y_PX
-    category = 'Camera'
+    cat = 'Camera'
 
     # TODO: test edge cases for "ensure*" functions
-    CAMERA_DIR = parser.get(category, 'camera_dir', fallback=CAMERA_DIR)
-    CALIB_DIR = parser.get(category, 'calib_dir', fallback=CALIB_DIR)
-    CALIB_SPACING_MM = parser.getfloat(
-        category, 'calib_spacing_mm', fallback=CALIB_SPACING_MM)
+    CAMERA_DIR = _get_cfg(parser, cat, 'camera_dir')
+    CALIB_DIR = _get_cfg(parser, cat, 'calib_dir')
+    CALIB_SPACING_MM = _get_cfg(parser, cat, 'calib_spacing_mm')
 
     # Ensure that the camera metadata and calibration image are processed
-    CAMERA_DIR = ensure_cihx_processed(CAMERA_DIR, output_dir=Path(OUTPUT_DIR))
+    CAMERA_DIR = ensure_cihx_processed(
+        CAMERA_DIR, output_dir=Path(OUTPUT_DIR + "/camera_metadata"))
     CALIB_DIR = ensure_calibration(CALIB_DIR, distance_mm=CALIB_SPACING_MM,
-                                   output_dir=Path(OUTPUT_DIR))
+                                   output_dir=Path(OUTPUT_DIR + "/calibration"))
 
     # Load CIHX metadata
     cihx_metadata = load_cihx_metadata(Path(CAMERA_DIR))
@@ -122,16 +125,52 @@ def read_file(config_file: Path) -> None:
         "resolution", {}).get("height")
 
     # [Preprocessing] ==========================================================
-    global DOWNSAMPLE_FACTOR
-    category = 'Preprocessing'
+    global DOWNSAMPLE_FACTOR, BACKGROUND_DIR, CROP_ROI
+    cat = 'Preprocessing'
 
-    DOWNSAMPLE_FACTOR = parser.getint(
-        category, 'downsample_factor', fallback=1)
+    DOWNSAMPLE_FACTOR = int(
+        _get_cfg(parser, cat, 'downsample_factor',
+                 fallback=str(DOWNSAMPLE_FACTOR))
+    )
+    BACKGROUND_DIR = _get_cfg(parser, cat, 'background_dir',
+                              fallback=BACKGROUND_DIR)
+    CROP_ROI = _get_cfg(parser, cat, 'crop_roi', fallback=CROP_ROI)
 
     # Additional sections can be added here following the same pattern
 
-    # Finally, ask if user wants to save updated config with paths to processed
-    # camera metadata, calibration image and, if applicable, background image
+    # After reading all config values, check for changes
+    updated_snapshot = _build_updated_snapshot(original_snapshot)
+    changes = _diff_snapshots(original_snapshot, updated_snapshot)
+
+    if not changes:
+        print("No configuration values changed; nothing to save.")
+        return
+    print("Updated configuration values detected:")
+    for section, option, old_value, new_value in changes:
+        print(f" - [{section}] {option}: '{old_value}' -> '{new_value}'")
+
+    # Prompt user to save changes
+    save_prompt = input(
+        f"Save updated configuration to {config_path}? A backup (.bak) will be created. [y/N]: "
+    ).strip().lower()
+
+    if save_prompt not in ("y", "yes"):
+        print("Skipping save. Changes not written to disk.")
+        return
+
+    updated_parser = configparser.ConfigParser()
+    updated_parser.read_dict(updated_snapshot)
+
+    backup_path = config_path.with_suffix(
+        config_path.suffix + "_" + timestamp_str() + ".bak")
+    if config_path.is_file():
+        shutil.copy2(config_path, backup_path)
+
+    with config_path.open('w') as config_fp:
+        updated_parser.write(config_fp)
+
+    print(
+        f"Saved updated configuration to {config_path}. Backup at {backup_path}.")
 
 
 def _get_image_list(data_path: Path, frames_to_use: list[int] | str = 'all', filetype: str = 'tif', lead_zeros: int = 5) -> list[str]:
@@ -175,6 +214,93 @@ def _get_image_list(data_path: Path, frames_to_use: list[int] | str = 'all', fil
     return image_files
 
 
+def _check_variables() -> None:
+    """Check that variables in the Correlation, Peaks, and Postprocessing categories all have the right length for the number of passes.
+
+    Raises:
+        ValueError: If any variable has an incorrect length."""
+    pass  # Placeholder for future implementation
+
+
+def _get_cfg(parser: configparser.ConfigParser, section: str, option: str,
+             fallback: str = "") -> str:
+    """Read a value from the config, treating empty strings as missing.
+
+    Always returns a string; if the value is missing or empty, ``fallback``
+    is returned instead.
+    """
+
+    try:
+        if fallback == "":
+            value = parser.get(section, option)
+        else:
+            value = parser.get(section, option, fallback=fallback)
+    except (configparser.NoSectionError, configparser.NoOptionError):
+        return fallback
+
+    if isinstance(value, str) and value.strip() == "":
+        return fallback
+    return value
+
+
+def _snapshot_parser(parser: configparser.ConfigParser) -> dict[str, dict[str, str]]:
+    """Capture parser values for diffing."""
+    snapshot: dict[str, dict[str, str]] = {}
+    for section in parser.sections():
+        snapshot[section] = {}
+        for option in parser.options(section):
+            snapshot[section][option] = parser.get(
+                section, option, fallback="")
+    return snapshot
+
+
+def _stringify(value) -> str:
+    """Convert values to strings for config storage."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return ",".join(str(v) for v in value)
+    return str(value)
+
+
+def _set_value(parser: configparser.ConfigParser, section: str, option: str, value) -> None:
+    """Set a value on the parser, creating the section if needed."""
+    if not parser.has_section(section):
+        parser.add_section(section)
+    parser.set(section, option, _stringify(value))
+
+
+def _diff_snapshots(original: dict[str, dict[str, str]], updated: dict[str, dict[str, str]]) -> list[tuple[str, str, str | None, str]]:
+    """Return (section, option, old, new) for changed values."""
+    changes: list[tuple[str, str, str | None, str]] = []
+    sections = set(original.keys()) | set(updated.keys())
+    for section in sections:
+        orig_section = original.get(section, {})
+        updated_section = updated.get(section, {})
+        options = set(orig_section.keys()) | set(updated_section.keys())
+        for option in options:
+            old_value = orig_section.get(option)
+            new_value = updated_section.get(option)
+            if old_value != new_value:
+                changes.append((section, option, old_value, new_value))
+    return changes
+
+
+def _build_updated_snapshot(original_snapshot: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+    """Populate a new snapshot using current globals for any matching config keys."""
+    updated_parser = configparser.ConfigParser()
+    updated_parser.read_dict(original_snapshot)
+
+    for section, options in original_snapshot.items():
+        for option in options:
+            global_name = option.upper()
+            if global_name in globals():
+                _set_value(updated_parser, section,
+                           option, globals()[global_name])
+
+    return _snapshot_parser(updated_parser)
+
+
 if __name__ == "__main__":
     # For testing purposes, read a sample config file
-    read_file(Path("src/tcm_piv/config.ini"))
+    read_file(Path("src/tcm_piv/empty_config.ini"))
