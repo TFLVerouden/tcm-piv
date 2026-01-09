@@ -15,7 +15,7 @@ from natsort import natsorted
 from tqdm import tqdm
 
 
-def save_backup(proc_path: str, file_name: str, 
+def save_backup(proc_path: str, file_name: str,
                 test_mode=False, **kwargs) -> bool:
     """
     Save a backup file to the specified path.
@@ -37,7 +37,7 @@ def save_backup(proc_path: str, file_name: str,
     if not kwargs:
         print("Warning: No variables provided for saving.")
         return False
-    
+
     # Check whether the supplied file name already has an extension
     if not file_name.endswith('.npz'):
         file_name += '.npz'
@@ -67,14 +67,14 @@ def init_subfolder(*path_components, debug=False, verbose=True) -> str:
     """
     if not path_components:
         raise ValueError("At least one path component must be provided")
-    
+
     folder_path = os.path.join(*path_components)
-    
+
     if not os.path.exists(folder_path) and not debug:
         os.makedirs(folder_path)
         if verbose:
             print(f"Created directory: {folder_path}")
-    
+
     return folder_path
 
 
@@ -123,6 +123,8 @@ def load_backup(proc_path: str, file_name: str, var_names=None,
     print(f"Loaded data from {file_path}")
     return loaded_vars
 
+# TODO: Look for use of these load image(s) functions and replace by new ones from tcm-utils
+
 
 def read_img(file_path: str) -> np.ndarray | None:
     """
@@ -141,7 +143,6 @@ def read_img(file_path: str) -> np.ndarray | None:
 
 
 def read_imgs(data_path: str, frame_nrs: list[int] | str, format: str = 'tif', lead_0: int = 5, only_count: bool = False, timing: bool = True) -> np.ndarray:
-
     """
     Load selected images from a directory into a 3D numpy array.
 
@@ -164,32 +165,34 @@ def read_imgs(data_path: str, frame_nrs: list[int] | str, format: str = 'tif', l
 
     # List all files in the directory
     files = natsorted(
-            [f for f in os.listdir(data_path) if f.endswith('.' + format)])
+        [f for f in os.listdir(data_path) if f.endswith('.' + format)])
 
     # Handle "all" option or specific frame numbers
     if frame_nrs == "all":
         # Load all images - filter by format and exclude hidden files
-        files = [f for f in files if f.endswith('.' + format) and not f.startswith('.')]
+        files = [f for f in files if f.endswith(
+            '.' + format) and not f.startswith('.')]
     else:
         # Filter files to include only those that match the specified frame numbers
         files = [f for f in files if any(f.endswith(f"{nr:0{lead_0}d}.{format}") for nr
                                          in frame_nrs) and not f.startswith('.')]
-    
+
     if not files:
-        raise FileNotFoundError(f"No files found in {data_path} with the specified criteria and format '{format}'.")
+        raise FileNotFoundError(
+            f"No files found in {data_path} with the specified criteria and format '{format}'.")
 
     if only_count:
         return len(files)
 
     # Read images into a 3D numpy array in parallel
     file_paths = [os.path.join(data_path, f) for f in files]
-    
+
     n_jobs = os.cpu_count() or 4
-    
+
     with ThreadPoolExecutor(max_workers=n_jobs) as executor:
-        imgs = list(tqdm(executor.map(read_img, file_paths), 
-                        total=len(file_paths), 
-                        desc='Reading images      '))
+        imgs = list(tqdm(executor.map(read_img, file_paths),
+                         total=len(file_paths),
+                         desc='Reading images      '))
 
     # Convert list of images to a numpy array
     imgs = np.array(imgs, dtype=np.uint64)
@@ -214,7 +217,7 @@ def save_cfig(directory: str, file_name: str, format: str = 'pdf', test_mode: bo
     # Only run when not in test mode
     if test_mode:
         return
-    
+
     # Otherwise, save figure
     else:
         # Set directory and file format

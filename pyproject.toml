@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = {"" = "source"}
 
 [tool.setuptools.package-data]
 tcm_piv = ["*.toml"]

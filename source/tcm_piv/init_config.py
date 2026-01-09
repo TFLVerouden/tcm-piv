@@ -18,8 +18,8 @@ import tifffile
 from natsort import natsorted
 from tcm_utils.camera_calibration import ensure_calibration
 from tcm_utils.file_dialogs import ask_open_file
-from tcm_utils.io_utils import ensure_path, load_images, prompt_yes_no
-from tcm_utils.read_cihx import ensure_cihx_processed, load_cihx_metadata
+from tcm_utils.io_utils import ensure_path, load_images, load_metadata, prompt_yes_no
+from tcm_utils.read_cihx import ensure_cihx_processed
 from tcm_utils.time_utils import timestamp_str
 from tcm_piv.preprocessing import crop, generate_background
 
@@ -79,6 +79,7 @@ NR_PASSES: int
 
 # [source]
 FRAMES_TO_USE: str | list[int]
+EXTRA_VEL_DIM_M: float
 
 # [preprocessing]
 DOWNSAMPLE_FACTOR: list[int] | int
@@ -147,7 +148,7 @@ def read_file(config_file: Path | str | None) -> None:
     visualisation = merged["visualisation"]
 
     # [source]
-    global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, N_IMAGES
+    global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, NR_IMAGES, EXTRA_VEL_DIM_M
     IMAGE_DIR = str(source["image_dir"])
     OUTPUT_DIR = str(source["output_dir"])
     FRAMES_TO_USE = source["frames_to_use"]
@@ -167,16 +168,19 @@ def read_file(config_file: Path | str | None) -> None:
     ))
 
     IMAGE_LIST = _get_image_list(Path(IMAGE_DIR), FRAMES_TO_USE)
-    N_IMAGES = len(IMAGE_LIST)
-    if N_IMAGES < 2:
+    NR_IMAGES = len(IMAGE_LIST)
+    if NR_IMAGES < 2:
         raise RuntimeError(
-            f"Error: Found only {N_IMAGES} images in {IMAGE_DIR}. "
+            f"Error: Found only {NR_IMAGES} images in {IMAGE_DIR}. "
             "At least 2 images are required for PIV analysis."
         )
-    print(f"Number of images to process: {N_IMAGES}")
+    print(f"Number of images to process: {NR_IMAGES}")
+
+    # formerly called "depth"
+    EXTRA_VEL_DIM_M = float(source["extra_vel_dim_m"])
 
     # [camera]
-    global CAMERA_DIR, CALIB_DIR, CALIB_SPACING_MM, TIMESTAMP, FRAMERATE_HZ, SHUTTERSPEED_NS, RESOLUTION_X_PX, RESOLUTION_Y_PX
+    global CAMERA_DIR, CALIB_DIR, CALIB_SPACING_MM, TIMESTAMP, FRAMERATE_HZ, TIMESTEP_S, SHUTTERSPEED_NS, IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX, IMAGE_WIDTH_M, IMAGE_HEIGHT_M, SCALE_M_PER_PX
     CAMERA_DIR = str(camera["camera_dir"])
     CALIB_DIR = str(camera["calib_dir"])
     CALIB_SPACING_MM = float(camera["calib_spacing_mm"])
@@ -197,13 +201,23 @@ def read_file(config_file: Path | str | None) -> None:
         )
     )
 
-    cihx_metadata = load_cihx_metadata(Path(CAMERA_DIR))
-    TIMESTAMP = cihx_metadata.get("timestamp")
-    camera_meta = cihx_metadata.get("camera_metadata", {})
-    FRAMERATE_HZ = camera_meta.get("recordRate")
-    SHUTTERSPEED_NS = camera_meta.get("shutterSpeedNsec")
-    RESOLUTION_X_PX = camera_meta.get("resolution", {}).get("width")
-    RESOLUTION_Y_PX = camera_meta.get("resolution", {}).get("height")
+    camera_metadata = load_metadata(Path(CAMERA_DIR))
+    TIMESTAMP = str(camera_metadata.get("timestamp"))
+    camera_meta = camera_metadata.get("camera_metadata", {})
+    FRAMERATE_HZ = int(camera_meta.get("recordRate"))
+    TIMESTEP_S = 1.0 / FRAMERATE_HZ  # Formerly called "dt"
+    SHUTTERSPEED_NS = int(camera_meta.get("shutterSpeedNsec"))
+    IMAGE_WIDTH_PX = int(camera_meta.get("resolution", {}).get("width"))
+    IMAGE_HEIGHT_PX = int(camera_meta.get("resolution", {}).get("height"))
+
+    calib_metadata = load_metadata(Path(CALIB_DIR))
+    IMAGE_WIDTH_M = float(calib_metadata.get(
+        "calibration", {}).get("image_size_m", {}).get("width"))
+    IMAGE_HEIGHT_M = float(calib_metadata.get(
+        # formerly called "frame_w" (as the images are rotated...)
+        "calibration", {}).get("image_size_m", {}).get("height"))
+    SCALE_M_PER_PX = float(calib_metadata.get(
+        "calibration", {}).get("scale_m_per_px"))
 
     # [preprocessing]
     global DOWNSAMPLE_FACTOR, BACKGROUND_DIR, CROP_ROI
@@ -224,7 +238,7 @@ def read_file(config_file: Path | str | None) -> None:
             image_paths=IMAGE_LIST,
             output_dir=Path(OUTPUT_DIR),
             crop_roi=CROP_ROI,
-            image_count=N_IMAGES,
+            image_count=NR_IMAGES,
         )
 
     # [correlation]

@@ -4,6 +4,7 @@ nr_passes = 3
 image_dir = "examples/two_frames/input"
 output_dir = "examples/two_frames/output"
 frames_to_use = "all"
+extra_vel_dim_m = 0.01
 
 [camera]
 camera_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/two_frames/input/test_P-001_20260107_173921_260107_174151_metadata.json"
@@ -12,7 +13,7 @@ calib_spacing_mm = 1.0
 
 [preprocessing]
 downsample_factor = [4, 1, 1]
-background_dir = "examples/two_frames/output/background_260109_222312.tif"
+background_dir = "examples/two_frames/output/background_260110_002535.tif"
 crop_roi = [0, 0, 0, 0]
 
 [correlation]
