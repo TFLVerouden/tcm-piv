@@ -153,6 +153,8 @@ def read_file(config_file: Path | str | None) -> None:
 
     # Additional sections can be added here following the same pattern
 
+    # TODO: CHeck whether smoothing lambda accepts 0 and then does not smooth. Or change function to do so
+
     # After reading all config values, check for changes
     updated_snapshot = _build_updated_snapshot(original_snapshot)
     changes = _diff_snapshots(original_snapshot, updated_snapshot)
@@ -165,11 +167,7 @@ def read_file(config_file: Path | str | None) -> None:
         print(f" - [{section}] {option}: '{old_value}' -> '{new_value}'")
 
     # Prompt user to save changes
-    save_prompt = input(
-        f"Save updated configuration to {config_path}? A backup (.bak) will be created. [y/N]: "
-    ).strip().lower()
-
-    if save_prompt not in ("y", "yes"):
+    if not prompt_yes_no(f"Save updated configuration to {config_path}? A backup (.bak) will be created. [y/N]: "):
         print("Skipping save. Changes not written to disk.")
         return
 
@@ -186,6 +184,7 @@ def read_file(config_file: Path | str | None) -> None:
 
     print(
         f"Saved updated configuration to {config_path}. Backup at {backup_path}.")
+    # TODO: Consider having a single full example config file, so we can put comments there that remain when generating an updated one.
 
 
 def _get_image_list(data_path: Path, frames_to_use: list[int] | str = 'all', filetype: str = 'tif', lead_zeros: int = 5) -> list[str]:
@@ -373,6 +372,7 @@ def _maybe_generate_background(
     print(f"Background saved to {output_path}")
     return str(output_path)
 
+
 if __name__ == "__main__":
     # For testing purposes, read a sample config file
-    read_file(Path("src/tcm_piv/empty_config.ini"))
+    read_file(Path("src/tcm_piv/config.ini"))
