@@ -1,20 +1,19 @@
-"""Initializes all user configuration parameters. Provides function
-`read_file()` to load a configuration file from disk.
+"""Configuration loading for tcm-piv.
 
-Example usage for `main.py`:
-    import load_config as cfg
-    cfg.read_file("config.ini")
+This module provides :func:`read_file` which loads a TOML configuration,
+applies packaged defaults, normalizes pass-dependent parameters, and
+exposes the resulting settings as module-level variables."""
 
-Namespace `cfg` now contains all user settings
-"""
+from __future__ import annotations
 
+import json
 import os
 import shutil
-import configparser
+import tomllib
+from copy import deepcopy
 from pathlib import Path
-import sys
+from typing import Any, Callable
 
-import numpy as np
 import tifffile
 from natsort import natsorted
 from tcm_utils.camera_calibration import ensure_calibration
@@ -24,124 +23,151 @@ from tcm_utils.read_cihx import ensure_cihx_processed, load_cihx_metadata
 from tcm_utils.time_utils import timestamp_str
 from tcm_piv.preprocessing import crop, generate_background
 
-# Default placeholder values for configuration parameters
 
+# These variables are populated by read_file(). Defaults live in default_config.toml.
+NR_PASSES: int
 
-# [Source]
-FRAMES_TO_USE = 'all'
+# [source]
+FRAMES_TO_USE: str | list[int]
 
-# [Camera]
+# [preprocessing]
+DOWNSAMPLE_FACTOR: list[int] | int
+BACKGROUND_DIR: str
+CROP_ROI: tuple[int, int, int, int]  # (y_start, y_end, x_start, x_end)
 
-# [Preprocessing]
-DOWNSAMPLE_FACTOR = 1
-BACKGROUND_DIR = ""
-CROP_ROI = (0, 0, 0, 0)  # (y_start, y_end, x_start, x_end)
+# [correlation]
+CORRS_TO_SUM: list[int] | int
+NR_WINDOWS: list[tuple[int, int]] | tuple[int, int]
+WINDOW_OVERLAP: list[float] | float
 
-# [Correlation]
+# [displacement]
+NR_PEAKS: list[int] | int
+MIN_PEAK_DISTANCE: list[int] | int
 
-# [Peaks]
+# [postprocessing]
+MAX_VELOCITY: list[tuple[float, float]] | tuple[float, float]
+NEIGHBOURHOOD_SIZE: list[tuple[int, int, int]] | tuple[int, int, int]
+NEIGHBOURHOOD_THRESHOLD: list[int | tuple[int, int]] | int | tuple[int, int]
+TIME_SMOOTHING_LAMBDA: list[float] | float
 
-# [Postprocessing]
-
-# [Modelling]
-
-# [Visualisation]
+# [visualisation]
+PLOT_MODEL: bool
+MODEL_GENDER: str
+MODEL_MASS: float
+MODEL_HEIGHT: float
 
 
 def read_file(config_file: Path | str | None) -> None:
-    """Reads a configuration file and sets module-level variables accordingly.
+    """Load TOML config, apply defaults, normalize settings, and set globals.
 
-    Parameters:
-        config_file (Path | str | None): Path to the configuration file.
+    If no valid config file is provided, the user is prompted to select one.
+    Canceling the prompt aborts.
     """
-    config_path = Path(config_file) if config_file else None
 
-    # If no config file provided, ask user to select one
+    config_path = Path(config_file) if config_file else None
     if not config_path or not config_path.is_file():
-        print("No configuration file provided or file does not exist.")
-        print("Please select a configuration file.")
         selected_path = ask_open_file(
             key="config_file",
             title="Select configuration file",
-            filetypes=(("INI files", "*.ini"), ("All files", "*.*")),
+            filetypes=(("TOML files", "*.toml"), ("All files", "*.*")),
         )
         if selected_path is None:
-            print("WARNING: No configuration file selected. Using default parameters.")
-            return
-
+            raise RuntimeError("No configuration file selected; aborting.")
         config_path = Path(selected_path)
 
     print(f"Reading configuration from: {config_path}.")
-    parser = configparser.ConfigParser()
-    parser.read(config_path)
-    original_snapshot = _snapshot_parser(parser)
+    with config_path.open("rb") as fp:
+        user_cfg = tomllib.load(fp)
 
-    # [Source] =================================================================
+    defaults = _read_packaged_default_config()
+    merged = _deep_merge(defaults, user_cfg)
+    original_snapshot = deepcopy(merged)
+
+    global NR_PASSES
+    NR_PASSES = int(merged["nr_passes"])
+    if NR_PASSES < 1:
+        raise ValueError("nr_passes must be >= 1")
+
+    source = merged["source"]
+    camera = merged["camera"]
+    preprocessing = merged["preprocessing"]
+    correlation = merged["correlation"]
+    displacement = merged["displacement"]
+    postprocessing = merged["postprocessing"]
+    visualisation = merged["visualisation"]
+
+    # [source]
     global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, N_IMAGES
-    cat = 'Source'
+    IMAGE_DIR = str(source["image_dir"])
+    OUTPUT_DIR = str(source["output_dir"])
+    FRAMES_TO_USE = source["frames_to_use"]
+    if not (FRAMES_TO_USE == "all" or isinstance(FRAMES_TO_USE, list)):
+        raise ValueError(
+            "source.frames_to_use must be 'all' or an array of integers")
+    if isinstance(FRAMES_TO_USE, list):
+        FRAMES_TO_USE = [int(v) for v in FRAMES_TO_USE]
 
-    # Get vars from config file or use defaults
-    IMAGE_DIR = _get_cfg(parser, cat, 'image_dir')
-    OUTPUT_DIR = _get_cfg(parser, cat, 'output_dir')
-    FRAMES_TO_USE = _get_cfg(parser, cat, 'frames_to_use',
-                             fallback=FRAMES_TO_USE)
+    IMAGE_DIR = str(ensure_path(IMAGE_DIR, "image_dir",
+                    title="Select image directory"))
+    OUTPUT_DIR = str(ensure_path(
+        OUTPUT_DIR,
+        "output_dir",
+        title="Select output directory",
+        default_dir=Path(IMAGE_DIR),
+    ))
 
-    # Ensure paths are valid, prompt user if necessary
-    IMAGE_DIR = ensure_path(IMAGE_DIR, 'image_dir',
-                            title='Select image directory')
-    OUTPUT_DIR = ensure_path(OUTPUT_DIR, 'output_dir',
-                             title='Select output directory',
-                             default_dir=Path(IMAGE_DIR))
-
-    # Get the number of images by reading the image path
     IMAGE_LIST = _get_image_list(Path(IMAGE_DIR), FRAMES_TO_USE)
     N_IMAGES = len(IMAGE_LIST)
     if N_IMAGES < 2:
-        raise Exception(f"Error: Found only {N_IMAGES} images in {IMAGE_DIR}.\n"
-                        f"At least 2 images are required for PIV analysis.")
+        raise RuntimeError(
+            f"Error: Found only {N_IMAGES} images in {IMAGE_DIR}. "
+            "At least 2 images are required for PIV analysis."
+        )
     print(f"Number of images to process: {N_IMAGES}")
 
-    # [Camera] =================================================================
+    # [camera]
     global CAMERA_DIR, CALIB_DIR, CALIB_SPACING_MM, TIMESTAMP, FRAMERATE_HZ, SHUTTERSPEED_NS, RESOLUTION_X_PX, RESOLUTION_Y_PX
-    cat = 'Camera'
+    CAMERA_DIR = str(camera["camera_dir"])
+    CALIB_DIR = str(camera["calib_dir"])
+    CALIB_SPACING_MM = float(camera["calib_spacing_mm"])
 
     # TODO: test edge cases for "ensure*" functions
-    CAMERA_DIR = _get_cfg(parser, cat, 'camera_dir')
-    CALIB_DIR = _get_cfg(parser, cat, 'calib_dir')
-    CALIB_SPACING_MM = _get_cfg(parser, cat, 'calib_spacing_mm')
 
-    # Ensure that the camera metadata and calibration image are processed
-    CAMERA_DIR = ensure_cihx_processed(
-        CAMERA_DIR, output_dir=Path(OUTPUT_DIR + "/camera_metadata"))
-    CALIB_DIR = ensure_calibration(CALIB_DIR, distance_mm=CALIB_SPACING_MM,
-                                   output_dir=Path(OUTPUT_DIR + "/calibration"))
+    CAMERA_DIR = str(
+        ensure_cihx_processed(
+            Path(CAMERA_DIR) if CAMERA_DIR else None,
+            output_dir=Path(OUTPUT_DIR) / "camera_metadata",
+        )
+    )
+    CALIB_DIR = str(
+        ensure_calibration(
+            Path(CALIB_DIR) if CALIB_DIR else None,
+            distance_mm=CALIB_SPACING_MM,
+            output_dir=Path(OUTPUT_DIR) / "calibration",
+        )
+    )
 
-    # Load CIHX metadata
     cihx_metadata = load_cihx_metadata(Path(CAMERA_DIR))
-
-    # Get some data from the CIHX metadata
     TIMESTAMP = cihx_metadata.get("timestamp")
     camera_meta = cihx_metadata.get("camera_metadata", {})
     FRAMERATE_HZ = camera_meta.get("recordRate")
     SHUTTERSPEED_NS = camera_meta.get("shutterSpeedNsec")
-    RESOLUTION_X_PX = camera_meta.get(
-        "resolution", {}).get("width")
-    RESOLUTION_Y_PX = camera_meta.get(
-        "resolution", {}).get("height")
+    RESOLUTION_X_PX = camera_meta.get("resolution", {}).get("width")
+    RESOLUTION_Y_PX = camera_meta.get("resolution", {}).get("height")
 
-    # [Preprocessing] ==========================================================
+    # [preprocessing]
     global DOWNSAMPLE_FACTOR, BACKGROUND_DIR, CROP_ROI
-    cat = 'Preprocessing'
+    DOWNSAMPLE_FACTOR = _normalize_per_pass(
+        preprocessing["downsample_factor"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: int(v),
+    )
+    BACKGROUND_DIR = preprocessing["background_dir"]
+    BACKGROUND_DIR = "" if BACKGROUND_DIR is None else str(BACKGROUND_DIR)
 
-    DOWNSAMPLE_FACTOR = int(
-        _get_cfg(parser, cat, 'downsample_factor',
-                 fallback=str(DOWNSAMPLE_FACTOR))
-    )
-    BACKGROUND_DIR = _get_cfg(parser, cat, 'background_dir')
-    CROP_ROI = _parse_crop_roi(
-        _get_cfg(parser, cat, 'crop_roi', fallback=_stringify(CROP_ROI)),
-        default=CROP_ROI,
-    )
+    roi_value = preprocessing["crop_roi"]
+    CROP_ROI = tuple(_as_int_tuple(roi_value, length=4)
+                     )  # type: ignore[assignment]
 
     if not BACKGROUND_DIR:
         BACKGROUND_DIR = _maybe_generate_background(
@@ -151,72 +177,167 @@ def read_file(config_file: Path | str | None) -> None:
             image_count=N_IMAGES,
         )
 
-    # Additional sections can be added here following the same pattern
+    # [correlation]
+    global CORRS_TO_SUM, NR_WINDOWS, WINDOW_OVERLAP
+    CORRS_TO_SUM = _normalize_per_pass(
+        correlation["corrs_to_sum"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: int(v),
+    )
+    NR_WINDOWS = _normalize_per_pass(
+        correlation["nr_windows"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: _as_int_tuple(v, length=2),
+        tuple_len=2,
+    )
+    WINDOW_OVERLAP = _normalize_per_pass(
+        correlation["window_overlap"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: float(v),
+    )
 
-    # TODO: CHeck whether smoothing lambda accepts 0 and then does not smooth. Or change function to do so
+    # [displacement]
+    global NR_PEAKS, MIN_PEAK_DISTANCE
+    NR_PEAKS = _normalize_per_pass(
+        displacement["nr_peaks"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: int(v),
+    )
+    MIN_PEAK_DISTANCE = _normalize_per_pass(
+        displacement["min_peak_distance"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: int(v),
+    )
 
-    # After reading all config values, check for changes
-    updated_snapshot = _build_updated_snapshot(original_snapshot)
-    changes = _diff_snapshots(original_snapshot, updated_snapshot)
+    # [postprocessing]
+    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA
+    MAX_VELOCITY = _normalize_per_pass(
+        postprocessing["max_velocity"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: _as_float_tuple(v, length=2),
+        tuple_len=2,
+    )
+    NEIGHBOURHOOD_SIZE = _normalize_per_pass(
+        postprocessing["neighbourhood_size"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: _as_int_tuple(v, length=3),
+        tuple_len=3,
+    )
 
+    def _parse_threshold(v: Any) -> int | tuple[int, int]:
+        if isinstance(v, list):
+            if len(v) != 2:
+                raise ValueError(
+                    "neighbourhood_threshold tuple must have length 2")
+            return (int(v[0]), int(v[1]))
+        return int(v)
+
+    thr_value = postprocessing["neighbourhood_threshold"]
+    if (
+        isinstance(thr_value, list)
+        and _is_scalar_sequence(thr_value)
+        and len(thr_value) == 2
+        and all(isinstance(x, (int, float)) for x in thr_value)
+    ):
+        NEIGHBOURHOOD_THRESHOLD = [_parse_threshold(
+            thr_value) for _ in range(NR_PASSES)]
+    else:
+        NEIGHBOURHOOD_THRESHOLD = _normalize_per_pass(
+            thr_value,
+            nr_passes=NR_PASSES,
+            element_parser=_parse_threshold,
+        )
+
+    TIME_SMOOTHING_LAMBDA = _normalize_per_pass(
+        postprocessing["time_smoothing_lambda"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: float(v),
+    )
+
+    # [visualisation]
+    global PLOT_MODEL, MODEL_GENDER, MODEL_MASS, MODEL_HEIGHT
+    PLOT_MODEL = bool(visualisation["plot_model"])
+    MODEL_GENDER = str(visualisation["model_gender"])
+    MODEL_MASS = float(visualisation["model_mass"])
+    MODEL_HEIGHT = float(visualisation["model_height"])
+
+    # Offer to update config if runtime adjustments changed values
+    updated_snapshot = deepcopy(original_snapshot)
+    updated_snapshot["nr_passes"] = NR_PASSES
+
+    updated_snapshot.setdefault("source", {})
+    updated_snapshot["source"].update(
+        {
+            "image_dir": IMAGE_DIR,
+            "output_dir": OUTPUT_DIR,
+            "frames_to_use": FRAMES_TO_USE,
+        }
+    )
+    updated_snapshot.setdefault("camera", {})
+    updated_snapshot["camera"].update(
+        {
+            "camera_dir": CAMERA_DIR,
+            "calib_dir": CALIB_DIR,
+            "calib_spacing_mm": CALIB_SPACING_MM,
+        }
+    )
+    updated_snapshot.setdefault("preprocessing", {})
+    updated_snapshot["preprocessing"].update(
+        {
+            "downsample_factor": DOWNSAMPLE_FACTOR,
+            "background_dir": BACKGROUND_DIR,
+            "crop_roi": list(CROP_ROI),
+        }
+    )
+
+    changes = _diff_dicts(original_snapshot, updated_snapshot)
     if not changes:
-        print("No configuration values changed; nothing to save.")
         return
-    print("Updated configuration values detected:")
-    for section, option, old_value, new_value in changes:
-        print(f" - [{section}] {option}: '{old_value}' -> '{new_value}'")
 
-    # Prompt user to save changes
-    if not prompt_yes_no(f"Save updated configuration to {config_path}? A backup (.bak) will be created. [y/N]: "):
+    print("Updated configuration values detected:")
+    for key_path, old_value, new_value in changes:
+        print(f" - {key_path}: {old_value!r} -> {new_value!r}")
+
+    if not prompt_yes_no(
+        f"Save updated configuration to {config_path}? A backup (.bak) will be created. [y/N]: "
+    ):
         print("Skipping save. Changes not written to disk.")
         return
 
-    updated_parser = configparser.ConfigParser()
-    updated_parser.read_dict(updated_snapshot)
-
     backup_path = config_path.with_suffix(
         config_path.suffix + "_" + timestamp_str() + ".bak")
-    if config_path.is_file():
-        shutil.copy2(config_path, backup_path)
-
-    with config_path.open('w') as config_fp:
-        updated_parser.write(config_fp)
-
+    shutil.copy2(config_path, backup_path)
+    config_path.write_text(_toml_dump(updated_snapshot), encoding="utf-8")
     print(
         f"Saved updated configuration to {config_path}. Backup at {backup_path}.")
-    # TODO: Consider having a single full example config file, so we can put comments there that remain when generating an updated one.
 
 
-def _get_image_list(data_path: Path, frames_to_use: list[int] | str = 'all', filetype: str = 'tif', lead_zeros: int = 5) -> list[str]:
-    """Helper function to get a list of image files from the data path.
+def _get_image_list(
+    data_path: Path,
+    frames_to_use: list[int] | str = "all",
+    filetype: str = "tif",
+    lead_zeros: int = 5,
+) -> list[str]:
+    """Helper function to get a list of image files from the data path."""
+    image_files: list[str] = []
 
-    Args:
-        data_path (Path): Path to the directory containing images.
-
-    Returns:
-        list[str]: List of image file paths.
-    """
-    image_files = []
-
-    # List all files in the directory with the specified filetype
     if data_path.is_dir():
         all_files = natsorted(
             [f for f in os.listdir(data_path) if f.endswith(f".{filetype}")]
         )
 
-        # Handle "all" option or specific frame numbers
         if frames_to_use == "all":
-            # Load all images, exclude hidden files
             image_files = [
-                os.path.join(data_path, f) for f in all_files
-                if not f.startswith('.')
+                os.path.join(data_path, f) for f in all_files if not f.startswith(".")
             ]
         else:
-            # Filter files to include only those that match the specified frame numbers
             image_files = [
-                os.path.join(data_path, f) for f in all_files
-                if any(f.endswith(f"{nr:0{lead_zeros}d}.{filetype}") for nr in frames_to_use)
-                and not f.startswith('.')
+                os.path.join(data_path, f)
+                for f in all_files
+                if any(
+                    f.endswith(f"{nr:0{lead_zeros}d}.{filetype}") for nr in frames_to_use
+                )
+                and not f.startswith(".")
             ]
     else:
         raise FileNotFoundError(
@@ -226,116 +347,6 @@ def _get_image_list(data_path: Path, frames_to_use: list[int] | str = 'all', fil
         raise FileNotFoundError(f"No image files found in {data_path}.")
 
     return image_files
-
-
-def _check_variables() -> None:
-    """Check that variables in the Correlation, Peaks, and Postprocessing categories all have the right length for the number of passes.
-
-    Raises:
-        ValueError: If any variable has an incorrect length."""
-    pass  # Placeholder for future implementation
-
-
-def _get_cfg(parser: configparser.ConfigParser, section: str, option: str,
-             fallback: str = "") -> str:
-    """Read a value from the config, treating empty strings as missing.
-
-    Always returns a string; if the value is missing or empty, ``fallback``
-    is returned instead.
-    """
-
-    try:
-        if fallback == "":
-            value = parser.get(section, option)
-        else:
-            value = parser.get(section, option, fallback=fallback)
-    except (configparser.NoSectionError, configparser.NoOptionError):
-        return fallback
-
-    if isinstance(value, str) and value.strip() == "":
-        return fallback
-    return value
-
-
-def _snapshot_parser(parser: configparser.ConfigParser) -> dict[str, dict[str, str]]:
-    """Capture parser values for diffing."""
-    snapshot: dict[str, dict[str, str]] = {}
-    for section in parser.sections():
-        snapshot[section] = {}
-        for option in parser.options(section):
-            snapshot[section][option] = parser.get(
-                section, option, fallback="")
-    return snapshot
-
-
-def _stringify(value) -> str:
-    """Convert values to strings for config storage."""
-    if value is None:
-        return ""
-    if isinstance(value, (list, tuple, np.ndarray)):
-        return ",".join(str(v) for v in value)
-    return str(value)
-
-
-def _set_value(parser: configparser.ConfigParser, section: str, option: str, value) -> None:
-    """Set a value on the parser, creating the section if needed."""
-    if not parser.has_section(section):
-        parser.add_section(section)
-    parser.set(section, option, _stringify(value))
-
-
-def _diff_snapshots(original: dict[str, dict[str, str]], updated: dict[str, dict[str, str]]) -> list[tuple[str, str, str | None, str]]:
-    """Return (section, option, old, new) for changed values."""
-    changes: list[tuple[str, str, str | None, str]] = []
-    sections = set(original.keys()) | set(updated.keys())
-    for section in sections:
-        orig_section = original.get(section, {})
-        updated_section = updated.get(section, {})
-        options = set(orig_section.keys()) | set(updated_section.keys())
-        for option in options:
-            old_value = orig_section.get(option)
-            new_value = updated_section.get(option)
-            if old_value != new_value:
-                changes.append((section, option, old_value, new_value))
-    return changes
-
-
-def _build_updated_snapshot(original_snapshot: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
-    """Populate a new snapshot using current globals for any matching config keys."""
-    updated_parser = configparser.ConfigParser()
-    updated_parser.read_dict(original_snapshot)
-
-    for section, options in original_snapshot.items():
-        for option in options:
-            global_name = option.upper()
-            if global_name in globals():
-                _set_value(updated_parser, section,
-                           option, globals()[global_name])
-
-    return _snapshot_parser(updated_parser)
-
-
-def _parse_crop_roi(value, default: tuple[int, int, int, int] = (0, -1, 0, -1)) -> tuple[int, int, int, int]:
-    """Parse crop ROI from config value into a 4-tuple of ints."""
-
-    if isinstance(value, (list, tuple, np.ndarray)) and len(value) == 4:
-        try:
-            return tuple(int(v) for v in value)  # type: ignore[return-value]
-        except (TypeError, ValueError):
-            return default
-
-    if isinstance(value, str):
-        cleaned = value.strip().strip("()[]")
-        if cleaned:
-            parts = [p.strip() for p in cleaned.split(',') if p.strip()]
-            if len(parts) == 4:
-                try:
-                    # type: ignore[return-value]
-                    return tuple(int(p) for p in parts)
-                except ValueError:
-                    return default
-
-    return default
 
 
 def _maybe_generate_background(
@@ -373,6 +384,151 @@ def _maybe_generate_background(
     return str(output_path)
 
 
+def _read_packaged_default_config() -> dict[str, Any]:
+    """Load packaged defaults from default_config.toml."""
+    try:
+        from importlib.resources import files
+
+        default_path = files("tcm_piv").joinpath("default_config.toml")
+        with default_path.open("rb") as fp:
+            return tomllib.load(fp)
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Failed to load packaged default_config.toml. "
+            "Make sure it is included as package data."
+        ) from exc
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Recursively merge override into base, returning a new dict."""
+    out = deepcopy(base)
+    for key, value in override.items():
+        if key in out and isinstance(out[key], dict) and isinstance(value, dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = deepcopy(value)
+    return out
+
+
+def _toml_escape_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _toml_dump_value(value: Any) -> str:
+    # TOML has no null; use empty string for optional paths.
+    if value is None:
+        return _toml_escape_string("")
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        return _toml_escape_string(value)
+    if isinstance(value, tuple):
+        return "[" + ", ".join(_toml_dump_value(v) for v in value) + "]"
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_dump_value(v) for v in value) + "]"
+    raise TypeError(f"Unsupported TOML value type: {type(value)!r}")
+
+
+def _toml_dump(config: dict[str, Any]) -> str:
+    """Serialize a limited TOML subset used by this project."""
+    lines: list[str] = []
+
+    for key, value in config.items():
+        if not isinstance(value, dict):
+            lines.append(f"{key} = {_toml_dump_value(value)}")
+
+    for section, table in config.items():
+        if not isinstance(table, dict):
+            continue
+        lines.append("")
+        lines.append(f"[{section}]")
+        for key, value in table.items():
+            if isinstance(value, dict):
+                raise TypeError(
+                    "Nested tables beyond 1 level are not supported")
+            lines.append(f"{key} = {_toml_dump_value(value)}")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def _is_scalar_sequence(value: Any) -> bool:
+    return isinstance(value, list) and (len(value) == 0 or not isinstance(value[0], list))
+
+
+def _as_int_tuple(value: Any, *, length: int) -> tuple[int, ...]:
+    if not isinstance(value, list) or len(value) != length:
+        raise ValueError(f"Expected an array of length {length}")
+    try:
+        return tuple(int(v) for v in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Expected integer array of length {length}") from exc
+
+
+def _as_float_tuple(value: Any, *, length: int) -> tuple[float, ...]:
+    if not isinstance(value, list) or len(value) != length:
+        raise ValueError(f"Expected an array of length {length}")
+    try:
+        return tuple(float(v) for v in value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Expected float array of length {length}") from exc
+
+
+def _normalize_per_pass(
+    value: Any,
+    *,
+    nr_passes: int,
+    element_parser: Callable[[Any], Any] | None = None,
+    tuple_len: int | None = None,
+) -> list[Any]:
+    """Normalize a parameter to a per-pass list of length nr_passes."""
+
+    def parse_elem(v: Any) -> Any:
+        return element_parser(v) if element_parser else v
+
+    if (
+        tuple_len is not None
+        and isinstance(value, list)
+        and _is_scalar_sequence(value)
+        and len(value) == tuple_len
+    ):
+        elem = parse_elem(value)
+        return [elem for _ in range(nr_passes)]
+
+    if not isinstance(value, list):
+        elem = parse_elem(value)
+        return [elem for _ in range(nr_passes)]
+
+    if len(value) == 1:
+        elem = parse_elem(value[0])
+        return [elem for _ in range(nr_passes)]
+
+    if len(value) != nr_passes:
+        raise ValueError(
+            f"Expected list length 1 or {nr_passes}, got {len(value)}")
+    return [parse_elem(v) for v in value]
+
+
+def _diff_dicts(original: dict[str, Any], updated: dict[str, Any]) -> list[tuple[str, Any, Any]]:
+    """Return (key_path, old, new) for changes. Supports 1-level nested tables."""
+    changes: list[tuple[str, Any, Any]] = []
+    keys = set(original.keys()) | set(updated.keys())
+    for key in sorted(keys):
+        o = original.get(key)
+        u = updated.get(key)
+        if isinstance(o, dict) and isinstance(u, dict):
+            subkeys = set(o.keys()) | set(u.keys())
+            for sk in sorted(subkeys):
+                ov = o.get(sk)
+                uv = u.get(sk)
+                if ov != uv:
+                    changes.append((f"{key}.{sk}", ov, uv))
+        else:
+            if o != u:
+                changes.append((key, o, u))
+    return changes
+
+
 if __name__ == "__main__":
-    # For testing purposes, read a sample config file
-    read_file(Path("src/tcm_piv/config.ini"))
+    read_file(Path("src/tcm_piv/config.toml"))

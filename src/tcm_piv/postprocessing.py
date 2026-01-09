@@ -11,7 +11,6 @@ from tqdm import trange
 
 
 def filter_outliers(mode: str, coords: np.ndarray, a: float | np.ndarray | None = None, b: float | None = None, verbose: bool = False):
-
     """
     Remove outliers from coordinates based on spatial and intensity criteria.
 
@@ -30,11 +29,11 @@ def filter_outliers(mode: str, coords: np.ndarray, a: float | np.ndarray | None 
             - Filtered coordinates with invalid points set to NaN
             - (if mode == 'intensity') also returns filtered intensities
     """
-    
+
     # Store original shape and flatten for processing
     orig_shape = coords.shape
     coords = coords.reshape(-1, coords.shape[-1])
-    
+
     # OPTION 1: filter a semicircle of radius a (x < 0)
     # and a rectangle of height 2a and width b (x >= 0).
     if mode == 'semicircle_rect':
@@ -45,7 +44,7 @@ def filter_outliers(mode: str, coords: np.ndarray, a: float | np.ndarray | None 
                  (coords[..., 1] ** 2 + coords[:, 0] ** 2 <= a ** 2))
                 | ((coords[:, 1] >= 0) & (coords[:, 1] <= b)
                    & (np.abs(coords[:, 0]) <= a)))
-    
+
     # OPTION 2: filter a circle at the origin with radius a
     elif mode == 'circle':
         # TODO: Test circular filtering
@@ -59,12 +58,14 @@ def filter_outliers(mode: str, coords: np.ndarray, a: float | np.ndarray | None 
         if a is None or b is None:
             raise ValueError("Both 'a' and 'b' parameters must be provided for "
                              "'intensity' mode.")
-        
+
         # Check that a is an ND numpy array of intensity values
         if not isinstance(a, np.ndarray) or a.shape != orig_shape[:-1]:
-            raise ValueError("Parameter 'a' must be an ND numpy array of intensity values matching the shape of the coordinates.")
+            raise ValueError(
+                "Parameter 'a' must be an ND numpy array of intensity values matching the shape of the coordinates.")
         if not isinstance(b, (int, float)):
-            raise ValueError("Parameter 'b' must be an integer or float representing the relative threshold.")
+            raise ValueError(
+                "Parameter 'b' must be an integer or float representing the relative threshold.")
 
         # Reshape a to match the flattened coords
         ints = a.reshape(-1)
@@ -79,15 +80,16 @@ def filter_outliers(mode: str, coords: np.ndarray, a: float | np.ndarray | None 
         raise ValueError(f"Unknown filtering mode: {mode}")
 
     # Apply the mask to the coordinates*
-    coords[~mask] = np.array([np.nan, np.nan])   
-    
+    coords[~mask] = np.array([np.nan, np.nan])
+
     if verbose:
         # Print summary statistics
-        print(f"Post-processing: global filter removed {np.sum(~mask)}/{coords.shape[0]} coordinates in mode '{mode}'")
+        print(
+            f"Post-processing: global filter removed {np.sum(~mask)}/{coords.shape[0]} coordinates in mode '{mode}'")
 
     # Reshape back to original shape
     coords = coords.reshape(orig_shape)
-    
+
     # In intensity mode, also return the filtered intensities
     if mode == 'intensity':
         ints[~mask] = np.nan
@@ -104,35 +106,39 @@ def _validate_n_nbs(n_nbs: int | str | tuple[int, int, int], max_shape: tuple[in
     elif isinstance(n_nbs, tuple):
         n_nbs = list(n_nbs)
     else:
-        raise ValueError("n_nbs must be integer, 'all', or a tuple of three values (int or 'all').")
-    
+        raise ValueError(
+            "n_nbs must be integer, 'all', or a tuple of three values (int or 'all').")
+
     # Process each dimension
     for i, n in enumerate(n_nbs):
         if n == "all":
             # Use dimension length (make it odd if necessary)
-            n_nbs[i] = max_shape[i] - 1 if max_shape[i] % 2 == 0 else max_shape[i]
+            n_nbs[i] = max_shape[i] - \
+                1 if max_shape[i] % 2 == 0 else max_shape[i]
         elif isinstance(n, int):
             if n % 2 == 0:
-                raise ValueError(f"n_nbs must be odd in each dimension (neighbourhood size including center). Got {n} for dimension {i}.")
+                raise ValueError(
+                    f"n_nbs must be odd in each dimension (neighbourhood size including center). Got {n} for dimension {i}.")
         else:
-            raise ValueError(f"Each element of n_nbs must be an integer or 'all'. Got {n} for dimension {i}.")
-    
+            raise ValueError(
+                f"Each element of n_nbs must be an integer or 'all'. Got {n} for dimension {i}.")
+
     return tuple(n_nbs)
 
 
 def _edge_nbs(i, j, k, n_nbs, nbs, n_corrs, n_wins_y, n_wins_x):
     """Get neighbourhood slice, handling coordinates at edges."""
     # Get neighbourhood indices, handling coordinates at edges
-    i_nbs = (np.clip(i, (n_nbs[0] - 1)//2, 
-                     n_corrs - (n_nbs[0] - 1)//2 - 1) 
+    i_nbs = (np.clip(i, (n_nbs[0] - 1)//2,
+                     n_corrs - (n_nbs[0] - 1)//2 - 1)
              - (n_nbs[0] - 1)//2)
-    j_nbs = (np.clip(j, (n_nbs[1] - 1)//2, 
-                     n_wins_y - (n_nbs[1] - 1)//2 - 1) 
+    j_nbs = (np.clip(j, (n_nbs[1] - 1)//2,
+                     n_wins_y - (n_nbs[1] - 1)//2 - 1)
              - (n_nbs[1] - 1)//2)
-    k_nbs = (np.clip(k, (n_nbs[2] - 1)//2, 
-                     n_wins_x - (n_nbs[2] - 1)//2 - 1) 
+    k_nbs = (np.clip(k, (n_nbs[2] - 1)//2,
+                     n_wins_x - (n_nbs[2] - 1)//2 - 1)
              - (n_nbs[2] - 1)//2)
-    
+
     return nbs[i_nbs, j_nbs, k_nbs]
 
 
@@ -154,12 +160,11 @@ def _outlier_dist(coord, med, threshold, mode):
         dist = np.abs(vec_length - med_length)
     else:
         raise ValueError(f"Unknown mode: {mode}. Use 'x', 'y', 'xy', or 'r'.")
-    
+
     return is_outl, dist
 
 
 def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int] = 3, thr: float | tuple[float, float] = 1, thr_unit: str = "std", mode: str = "xy", replace: bool | str = False, verbose: bool = False, timing: bool = False) -> np.ndarray:
-
     """
     Filter out coordinates that are too different from their neighbours.
 
@@ -199,25 +204,25 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
     if was_4d:
         coords = coords[:, :, :, np.newaxis, :]
     n_corrs, n_wins_y, n_wins_x, _, _ = coords.shape
-    
+
     # Move NaNs to end (no effect on 4D->5D since there's only 1 peak)
     coords = strip_peaks(coords, axis=-2, mode='sort', verbose=False)
 
     # Validate n_nbs
     n_nbs = _validate_n_nbs(n_nbs, (n_corrs, n_wins_y, n_wins_x))
-    
+
     # Initialize counters for verbose mode
     if verbose:
         outlier_count = 0
         nan_replaced_count = 0
         outlier_replaced_count = 0
-    
+
     # Handle replace parameter
     if replace is True:
         replace = "median"
     elif replace not in [False, "median", "closest"]:
         raise ValueError("replace must be False, True, 'median', or 'closest'")
-    
+
     if replace == "closest" and was_4d:
         raise ValueError("'closest' replacement mode requires 5D input array")
 
@@ -227,7 +232,7 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
     # Get a set of sliding windows around each (bulk) coordinate
     nbs = np.lib.stride_tricks.sliding_window_view(coords_work,
-    (n_nbs[0], n_nbs[1], n_nbs[2], 1))[..., 0]
+                                                   (n_nbs[0], n_nbs[1], n_nbs[2], 1))[..., 0]
 
     # TODO: Multi-thread
     # Iterate over each coordinate
@@ -237,7 +242,8 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
                 # NEIGHBOURHOOD ANALYSIS
                 # Get neighbourhood, handling coordinates at edges
-                nb = _edge_nbs(i, j, k, n_nbs, nbs, n_corrs, n_wins_y, n_wins_x)
+                nb = _edge_nbs(i, j, k, n_nbs, nbs,
+                               n_corrs, n_wins_y, n_wins_x)
 
                 # If the neighbourhood is empty, skip to the next coordinate
                 if np.all(np.isnan(nb)):
@@ -245,14 +251,14 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
                 # Calculate the median
                 med = np.nanmedian(nb, axis=(1, 2, 3))
-                
+
                 # Check for identical neighbourhood (no outliers possible)
                 if np.all(nb == nb[0, 0, 0, :]):
                     if replace:
                         # If entire neighbourhood is identical, replace with that value
                         coords_out[i, j, k, 0, :] = nb[0, 0, 0, :]
                     continue
-                
+
                 # COORDINATE VALIDATION
                 # Calculate actual threshold based on mode
                 if thr_unit == "std":
@@ -262,7 +268,8 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
                         continue
                     # Handle tuple or scalar threshold
                     if isinstance(thr, tuple):
-                        thr_cur = np.array([thr[0] * std[0], thr[1] * std[1]])  # (thr_y, thr_x)
+                        # (thr_y, thr_x)
+                        thr_cur = np.array([thr[0] * std[0], thr[1] * std[1]])
                     else:
                         thr_cur = thr * std
                 else:  # thr_unit == "pxs"
@@ -274,15 +281,15 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
                 # Get the coordinate to check
                 coord = coords[i, j, k, 0, :]
-                        
+
                 # Check if the coordinate is already NaN in the input
                 is_nan = np.any(np.isnan(coord))
-                
+
                 # Check if the current coordinate is an outlier
                 is_outl = False
                 if not is_nan:
                     is_outl, _ = _outlier_dist(coord, med, thr_cur, mode)
-                
+
                 # Update counters for verbose mode
                 if verbose:
                     if is_outl:
@@ -301,20 +308,20 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
                         # Find the closest valid candidate peak inline
                         min_distance = np.inf
                         closest_peak = None
-                        
+
                         for peak in coords[i, j, k, :, :]:
                             # Skip NaN peaks
                             if np.any(np.isnan(peak)):
                                 continue
-                                
+
                             # Check if it is outlier
                             is_outl, dist = _outlier_dist(peak, med,
                                                           thr_cur, mode)
-                            
+
                             if not is_outl and dist < min_distance:
                                 min_distance = dist
                                 closest_peak = peak
-                        
+
                         # Only replace if we found a valid peak!
                         if closest_peak is not None:
                             coords_out[i, j, k, 0, :] = closest_peak
@@ -325,10 +332,12 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
     if verbose:
         if replace:
             total_coords = np.prod(coords.shape[:-2])
-            print(f"Post-processing: neighbour filter ({thr_unit}) replaced {outlier_replaced_count}/{total_coords} outliers and {nan_replaced_count} other NaNs")
+            print(
+                f"Post-processing: neighbour filter ({thr_unit}) replaced {outlier_replaced_count}/{total_coords} outliers and {nan_replaced_count} other NaNs")
         else:
             total_coords = np.prod(coords.shape[:-2])
-            print(f"Post-processing: neighbour filter ({thr_unit}) removed {outlier_count}/{total_coords} outliers")
+            print(
+                f"Post-processing: neighbour filter ({thr_unit}) removed {outlier_count}/{total_coords} outliers")
 
     # Restore original shape for 4D arrays
     if was_4d:
@@ -338,7 +347,6 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
 
 def first_valid(arr: np.ndarray) -> float | int | np.generic:
-
     """
     Function to find the first non-NaN value in a 1D array.
 
@@ -356,14 +364,13 @@ def first_valid(arr: np.ndarray) -> float | int | np.generic:
                 return c
         # If no valid value found, return NaN
         return np.nan
-    
+
     # Throw an error if the input is not 1D
     else:
         raise ValueError("Input must be a 1D array.")
 
 
 def strip_peaks(coords: np.ndarray, axis: int = -2, mode: str = 'reduce', verbose: bool = False) -> np.ndarray:
-
     """
     Process peaks along an axis containing options.
 
@@ -383,9 +390,9 @@ def strip_peaks(coords: np.ndarray, axis: int = -2, mode: str = 'reduce', verbos
 
     if coords.ndim < 3:
         return coords  # Nothing to strip
-    
+
     if mode == 'reduce':
-        # Apply the first_valid function along the specified axis  
+        # Apply the first_valid function along the specified axis
         coords_str = np.apply_along_axis(first_valid, axis, coords.copy())
 
         # Report on the number of NaNs
@@ -393,46 +400,47 @@ def strip_peaks(coords: np.ndarray, axis: int = -2, mode: str = 'reduce', verbos
             n_nans_i = np.sum(np.any(np.isnan(coords[:, :, :, 0, :]), axis=-1))
             n_nans_f = np.sum(np.any(np.isnan(coords_str), axis=-1))
 
-            print(f"Post-processing: {n_nans_i}/{np.prod(coords.shape[0:3])} most likely peak candidates invalid; left with {n_nans_f} after taking next-best peak")
+            print(
+                f"Post-processing: {n_nans_i}/{np.prod(coords.shape[0:3])} most likely peak candidates invalid; left with {n_nans_f} after taking next-best peak")
         return coords_str
-    
+
     elif mode == 'sort':
         # Sort peaks to move NaNs to the end without reducing dimensionality
         coords_sor = coords.copy()
-        
+
         # Get all dimensions except the peak axis and coordinate axis
         pk_ax = axis if axis >= 0 else len(coords.shape) + axis
-        
-        # Iterate through all positions and sort peaks at each location        
+
+        # Iterate through all positions and sort peaks at each location
         for idx in np.ndindex(coords.shape[:pk_ax] + coords.shape[pk_ax+1:-1]):
             # Create full index for accessing the peak dimension
             full_idx = idx[:pk_ax] + (slice(None),) + idx[pk_ax:]
-            
+
             # Get peaks for this location
             peaks = coords_sor[full_idx]  # Shape: (n_peaks, 2)
-            
+
             # Find which peaks are valid (not NaN)
             mask = np.any(np.isnan(peaks), axis=-1)
 
             # Reorder: valid peaks first, then NaN peaks
             coords_sor[full_idx] = peaks[np.concatenate([np.where(~mask)[0],
                                                          np.where(mask)[0]])]
-        
+
         if verbose:
             print(f"Post-processing: peak sorting maintained "
                   f"{np.sum(~np.any(np.isnan(coords_sor), axis=-1))} valid "
                   f"peaks (was {np.sum(~np.any(np.isnan(coords), axis=-1))})")
         return coords_sor
-    
+
     else:
         raise ValueError(f"Unknown mode: {mode}. Use 'reduce' or 'sort'.")
 
 
 def smooth(time: np.ndarray, disps: np.ndarray, col: str | int = 'both', lam: float = 5e-7, type: type = int) -> np.ndarray:
-
     """
     Smooth displacement data along a specified axis using a smoothing spline.
 
+    # TODO: If smoothing lambda is zero, return original data?
     Args:
         time (np.ndarray): 1D array of time values.
         disps (np.ndarray): 2D array of displacement values.
@@ -461,12 +469,14 @@ def smooth(time: np.ndarray, disps: np.ndarray, col: str | int = 'both', lam: fl
     # If cols is 'both', apply smoothing to both columns
     if col == 'both':
         for i in range(disps_spl.shape[1]):
-            disps_spl[:, i] = make_smoothing_spline(time[mask], disps_spl[mask, i], lam=lam)(time).astype(type)
+            disps_spl[:, i] = make_smoothing_spline(
+                time[mask], disps_spl[mask, i], lam=lam)(time).astype(type)
 
     # Otherwise, apply smoothing to the specified column
     elif isinstance(col, int):
-        disps_spl[:, col] = make_smoothing_spline(time[mask], disps_spl[mask, col], lam=lam)(time).astype(type)
+        disps_spl[:, col] = make_smoothing_spline(
+            time[mask], disps_spl[mask, col], lam=lam)(time).astype(type)
     else:
         raise ValueError("cols must be 'both' or an integer index.")
-    
+
     return disps_spl.reshape(orig_shape)

@@ -1,0 +1,58 @@
+# Default configuration for tcm-piv
+#
+# Notes:
+# - This file is packaged with the library and provides fallbacks.
+# - User configs override these values.
+# - Per-pass parameters may be a scalar (broadcast) or a list of length `nr_passes`.
+
+nr_passes = 1
+
+[source]
+image_dir = ""
+output_dir = ""
+frames_to_use = "all"  # "all" or array of ints
+
+[camera]
+camera_dir = ""
+calib_dir = ""
+calib_spacing_mm = 1.0
+
+[preprocessing]
+# Per-pass
+# downsample_factor = 1
+# downsample_factor = [4, 1, 1]
+downsample_factor = 1
+
+# Empty string means: not provided
+background_dir = ""
+
+# (y_start, y_end, x_start, x_end)
+# y_end/x_end: 0 means full extent; negative means offset from end.
+crop_roi = [0, 0, 0, 0]
+
+[correlation]
+# Per-pass
+corrs_to_sum = 1
+nr_windows = [1, 1]        # or [[1, 1], [1, 8], ...]
+window_overlap = 0.0       # 0..1
+
+[displacement]
+# Per-pass
+nr_peaks = 1
+min_peak_distance = 5
+
+[postprocessing]
+# Per-pass
+max_velocity = [75.0, 10.0]
+neighbourhood_size = [3, 3, 3]
+
+# Per-pass; element can be int or [thr_y, thr_x]
+neighbourhood_threshold = 1
+
+time_smoothing_lambda = 0.0
+
+[visualisation]
+plot_model = false
+model_gender = "male"
+model_mass = 70.0
+model_height = 1.93
