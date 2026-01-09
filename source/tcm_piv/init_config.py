@@ -25,6 +25,56 @@ from tcm_piv.preprocessing import crop, generate_background
 
 
 # These variables are populated by read_file(). Defaults live in default_config.toml.
+#
+# MAINTENANCE GUIDE (adding/changing config variables)
+# --------------------------------------------------
+# The config system is intentionally “TOML-driven”:
+# - `default_config.toml` is the single source of truth for defaults.
+# - `read_file()` loads user TOML, deep-merges it over the defaults, and then
+#   normalizes/types values before exposing them as module-level variables.
+# - The Python code should NOT hard-code fallback defaults in `.get(..., default)`.
+#
+# When you ADD a new config variable:
+# 1) Add it to `default_config.toml` under the right table.
+#    - Every key that `read_file()` indexes (e.g. `preprocessing["crop_roi"]`)
+#      must exist in defaults.
+#    - Keep tables only 1 level deep (this project’s TOML writer `_toml_dump()`
+#      does not support nested tables beyond `[section] key = value`).
+#    - TOML has no `null`. For “optional path” style values, use the convention
+#      of an empty string `""` meaning “not provided”.
+#
+# 2) Add/update the example config (`config.toml`) so users see the new option.
+#    - Put a realistic example value and short comment.
+#
+# 3) Add a module-level type annotation here.
+#    - This is for IDE/type-checking and for documenting what `read_file()` sets.
+#
+# 4) In `read_file()`, read the value from the merged config and normalize it.
+#    Typical patterns:
+#    - Scalar (single value): `value = float(table["my_key"])`
+#    - Per-pass: use `_normalize_per_pass(...)`.
+#      * If it can be either scalar or per-pass list, `_normalize_per_pass` will
+#        broadcast a scalar or `[x]` to length `nr_passes`.
+#      * For “tuple-like” arrays (e.g. `[w, h]`), use `_as_int_tuple/_as_float_tuple`
+#        and pass `tuple_len=...` so `[w, h]` is treated as one element, not as
+#        per-pass list.
+#
+# 5) If runtime code can “fill in” this value (e.g. prompting for paths,
+#    generating a background, running ensure_*), decide whether it should be
+#    persisted back to the user config.
+#    - If yes: add it to `updated_snapshot[...]` so it appears in the diff and
+#      can be saved (with backup) to the original TOML.
+#    - If no: keep it as a runtime-only variable.
+#
+# When you CHANGE a variable (rename/change type/change meaning):
+# - Update `default_config.toml`, `config.toml`, and the corresponding parsing
+#   logic in `read_file()` together.
+# - If you rename keys, consider temporarily supporting the old key by mapping
+#   it in code during a transition period (but keep defaults TOML consistent).
+#
+# After changes:
+# - Run `python -m tcm_piv.main path/to/config.toml` (or your normal entrypoint)
+#   to sanity-check parsing and the “update config with backup” flow.
 NR_PASSES: int
 
 # [source]

@@ -4,6 +4,15 @@
 # - This file is packaged with the library and provides fallbacks.
 # - User configs override these values.
 # - Per-pass parameters may be a scalar (broadcast) or a list of length `nr_passes`.
+#
+# Maintenance:
+# - Treat this file as the single source of truth for defaults.
+#   The Python loader merges user config over these defaults and should not
+#   duplicate defaults in code.
+# - Keep tables only one level deep (e.g. `[section] key = value`).
+# - TOML has no `null`. Use empty string "" as “not provided” for optional paths.
+# - For “tuple-like” values, use arrays like `[w, h]`; for per-pass tuple values,
+#   use arrays-of-arrays like `[[w, h], [w2, h2], ...]`.
 
 nr_passes = 1
 
