@@ -440,7 +440,6 @@ def smooth(time: np.ndarray, disps: np.ndarray, col: str | int = 'both', lam: fl
     """
     Smooth displacement data along a specified axis using a smoothing spline.
 
-    # TODO: If smoothing lambda is zero, return original data?
     Args:
         time (np.ndarray): 1D array of time values.
         disps (np.ndarray): 2D array of displacement values.
@@ -453,6 +452,9 @@ def smooth(time: np.ndarray, disps: np.ndarray, col: str | int = 'both', lam: fl
     Returns:
         np.ndarray: 2D array of smoothed displacements (same shape as input)
     """
+
+    if lam == 0:
+        return disps
 
     # Work on copy
     disps_spl = disps.copy()
