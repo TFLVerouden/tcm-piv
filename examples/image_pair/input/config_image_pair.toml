@@ -18,7 +18,7 @@ crop_roi = [0, 0, 0, 0]
 
 [correlation]
 corrs_to_sum = [1, 1]
-nr_windows = [[1, 1],[8, 1]]
+nr_windows = [[1, 1],[1, 8]]
 window_overlap = 0
 
 [displacement]
@@ -30,9 +30,13 @@ max_velocity = [200, 200]
 neighbourhood_size = [1, 1, 1]
 neighbourhood_threshold = 5
 time_smoothing_lambda = 0
+flow_direction = "y"
 
 [visualisation]
 plot_model = true
 model_gender = "male"
 model_mass = 70.0
 model_height = 1.93
+plot_global_filters = true
+plot_window_layout = true
+plot_flow_rate = true

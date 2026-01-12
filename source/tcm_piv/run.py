@@ -79,6 +79,7 @@ import cv2 as cv
 import numpy as np
 
 import tcm_piv as piv
+import tcm_piv.visualisation as viz
 from tcm_piv import init_config as cfg
 from tcm_piv.preprocessing import crop
 from tcm_piv.checkpoints import (
@@ -90,43 +91,40 @@ from tcm_piv.checkpoints import (
     write_pairs_csv,
     write_postprocessed_csv,
     write_unfiltered_peaks_csv_gz,
-    write_win_pos_csv,
 )
 from tcm_utils.io_utils import load_images
 from tcm_utils.time_utils import timestamp_str
 
 
-def run(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
+def run(
+    *,
+    config_file: str | Path | None = None,
+    resume_run_dir: str | Path | None = None,
+    start_pass_1b: int = 1,
+) -> Path:
+    """Run the PIV pipeline.
 
-    # CLI signature (positional):
-    #   1) config_file (optional; if missing, a file picker prompt is used)
-    #   2) resume_run_dir (optional; if provided, we resume into that folder)
-    #
-    # Example:
-    #   python -m tcm_piv.run config.toml
-    #   python -m tcm_piv.run config.toml output/runs/260110_004942
+    Args:
+        config_file: Path to a TOML config file. If None, a file picker prompt is used.
+        resume_run_dir: Existing run directory to resume into. If None, a new run is created.
+        start_pass_1b: 1-based pass index to start at when resuming.
 
-    config_file: Path | None
-    if len(argv) >= 1 and argv[0]:
-        config_file = Path(argv[0])
-        argv = argv[1:]
-    else:
-        config_file = None
+    Returns:
+        run_dir (Path): Path to the run directory where results are stored.
+    """
 
-    # Optional: resume into an existing run directory.
-    resume_run_dir: Path | None
-    if len(argv) >= 1 and argv[0]:
-        resume_run_dir = Path(argv[0])
-    else:
-        resume_run_dir = None
+    if start_pass_1b < 1:
+        raise ValueError("start_pass_1b must be >= 1")
 
-    cfg.read_file(config_file)
+    config_path = Path(config_file) if config_file else None
+    resume_path = Path(resume_run_dir) if resume_run_dir else None
+
+    cfg.read_file(config_path)
 
     # Each run gets its own directory so results are reproducible and
     # resumable. When resuming, the run folder is provided explicitly.
     run_id = timestamp_str()
-    run_dir = resume_run_dir or init_run_dir(Path(cfg.OUTPUT_DIR), run_id)
+    run_dir = resume_path or init_run_dir(Path(cfg.OUTPUT_DIR), run_id)
 
     # Pair mapping for CSV row -> image filenames.
     #
@@ -151,6 +149,11 @@ def run(argv: list[str] | None = None) -> int:
         frames = list(range(1, cfg.NR_IMAGES + 1))
     time_s = piv.get_time(frames, float(cfg.TIMESTEP_S))
 
+    filter_ranges: list[tuple[float, float]] = []
+    window_layouts: list[dict[str, Any]] = []
+    # (vector overlay plotting removed for now)
+    final_disp_final: np.ndarray | None = None
+
     # Lazily loaded image stack. We only load if we need correlation.
     imgs: np.ndarray | None = None
 
@@ -158,15 +161,52 @@ def run(argv: list[str] | None = None) -> int:
     # next pass (multi-pass PIV refinement).
     prev_disp_final: np.ndarray | None = None
 
+    if start_pass_1b > cfg.NR_PASSES:
+        raise ValueError(
+            f"start_pass ({start_pass_1b}) exceeds configured nr_passes ({cfg.NR_PASSES})"
+        )
+
     for pass_i in range(cfg.NR_PASSES):
         pass_1b = pass_i + 1
         paths = pass_paths(run_dir, pass_1b)
 
-        win_pos: np.ndarray | None = None
+        plot_windows = bool(_per_pass(cfg.WINDOW_PLOT_ENABLED, pass_i))
+        # vector overlays removed for now
 
         n_wins = tuple(_per_pass(cfg.NR_WINDOWS, pass_i))
         n_wy, n_wx = int(n_wins[0]), int(n_wins[1])
         n_pairs = len(time_s)
+
+        if pass_1b < start_pass_1b:
+            if resume_path is None:
+                raise ValueError(
+                    "start_pass_1b > 1 requires resume_run_dir pointing to an existing run"
+                )
+            if not paths.post_csv.exists():
+                raise RuntimeError(
+                    f"Requested start at pass {start_pass_1b}, but prior pass {pass_1b} has no post file: {paths.post_csv}"
+                )
+            _, _, _, prev_disp_final = load_postprocessed_csv(
+                paths.post_csv,
+                n_pairs=n_pairs,
+                n_wy=n_wy,
+                n_wx=n_wx,
+            )
+            continue
+
+        vx_max, vy_max = _per_pass(cfg.MAX_VELOCITY, pass_i)
+        filter_ranges.append((float(vx_max), float(vy_max)))
+
+        thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_i)
+        n_nbs = tuple(int(x)
+                      for x in _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_i))
+        lam = float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_i))
+
+        ds_fac = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_i))
+        corrs_to_sum = int(_per_pass(cfg.CORRS_TO_SUM, pass_i))
+        nr_peaks = int(_per_pass(cfg.NR_PEAKS, pass_i))
+        min_peak_dist = int(_per_pass(cfg.MIN_PEAK_DISTANCE, pass_i))
+        overlap = float(_per_pass(cfg.WINDOW_OVERLAP, pass_i))
 
         # Metadata is written once the pass completes.
         # It documents shapes, key config knobs, and the filenames that belong
@@ -175,20 +215,19 @@ def run(argv: list[str] | None = None) -> int:
             "pass": pass_1b,
             "n_pairs": n_pairs,
             "n_windows": [n_wy, n_wx],
-            "downsample_factor": int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_i)),
-            "corrs_to_sum": int(_per_pass(cfg.CORRS_TO_SUM, pass_i)),
-            "nr_peaks": int(_per_pass(cfg.NR_PEAKS, pass_i)),
-            "min_peak_distance": int(_per_pass(cfg.MIN_PEAK_DISTANCE, pass_i)),
-            "window_overlap": float(_per_pass(cfg.WINDOW_OVERLAP, pass_i)),
-            "max_velocity_vx_vy_m_s": list(_per_pass(cfg.MAX_VELOCITY, pass_i)),
-            "neighbourhood_size": list(_per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_i)),
-            "neighbourhood_threshold": _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_i),
-            "time_smoothing_lambda": float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_i)),
+            "downsample_factor": ds_fac,
+            "corrs_to_sum": corrs_to_sum,
+            "nr_peaks": nr_peaks,
+            "min_peak_distance": min_peak_dist,
+            "window_overlap": overlap,
+            "max_velocity_vx_vy_m_s": [float(vx_max), float(vy_max)],
+            "neighbourhood_size": list(n_nbs),
+            "neighbourhood_threshold": thr,
+            "time_smoothing_lambda": lam,
             "files": {
                 "pairs": "../pairs.csv",
                 "unfiltered": paths.peaks_csv_gz.name,
                 "post": paths.post_csv.name,
-                "win_pos": paths.win_pos_csv.name,
             },
         }
 
@@ -204,6 +243,19 @@ def run(argv: list[str] | None = None) -> int:
                 n_wy=n_wy,
                 n_wx=n_wx,
             )
+            if plot_windows:
+                shifts = None
+                if pass_i > 0 and prev_disp_final is not None:
+                    shifts = piv.disp2shift((n_wy, n_wx), prev_disp_final)
+                window_layouts.append({
+                    "pass": pass_1b,
+                    "n_wins": (n_wy, n_wx),
+                    "overlap": overlap,
+                    "shifts": shifts,
+                })
+
+            if pass_i == cfg.NR_PASSES - 1:
+                final_disp_final = disp_final
             prev_disp_final = disp_final
             continue
 
@@ -215,7 +267,7 @@ def run(argv: list[str] | None = None) -> int:
                 n_pairs=n_pairs,
                 n_wy=n_wy,
                 n_wx=n_wx,
-                n_peaks=int(_per_pass(cfg.NR_PEAKS, pass_i)),
+                n_peaks=nr_peaks,
             )
         else:
             # Full computation path: we need images to compute correlations.
@@ -252,15 +304,15 @@ def run(argv: list[str] | None = None) -> int:
                 imgs,
                 n_wins=(n_wy, n_wx),
                 shifts=shifts,
-                overlap=float(_per_pass(cfg.WINDOW_OVERLAP, pass_i)),
-                ds_fac=int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_i)),
+                overlap=overlap,
+                ds_fac=ds_fac,
             )
 
             # 2) Optionally sum correlations over a time window.
             #    This is a denoising/smoothing step in correlation space.
             corrs_sum = piv.sum_corrs(
                 corrs,
-                int(_per_pass(cfg.CORRS_TO_SUM, pass_i)),
+                corrs_to_sum,
                 n_wins=(n_wy, n_wx),
                 shifts=shifts,
             )
@@ -270,19 +322,14 @@ def run(argv: list[str] | None = None) -> int:
                 corrs_sum,
                 n_wins=(n_wy, n_wx),
                 shifts=shifts,
-                n_peaks=int(_per_pass(cfg.NR_PEAKS, pass_i)),
-                ds_fac=int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_i)),
-                min_dist=int(_per_pass(cfg.MIN_PEAK_DISTANCE, pass_i)),
+                n_peaks=nr_peaks,
+                ds_fac=ds_fac,
+                min_dist=min_peak_dist,
+                subpx=pass_i == cfg.NR_PASSES - 1,
             )
 
             # Window positions (for plotting/interpretation) are derived from
             # the first image only (geometry only, no time dependence).
-            _, win_pos = piv.split_n_shift(
-                imgs[0],
-                (n_wy, n_wx),
-                overlap=float(_per_pass(cfg.WINDOW_OVERLAP, pass_i)),
-            )
-
             # Persist stage-1 checkpoint.
             write_unfiltered_peaks_csv_gz(
                 paths.peaks_csv_gz,
@@ -292,14 +339,8 @@ def run(argv: list[str] | None = None) -> int:
 
         # Stage 2: postprocess the multi-peak results into a usable single-peak
         # displacement field, applying outlier and neighbour filtering.
-        vx_max, vy_max = _per_pass(cfg.MAX_VELOCITY, pass_i)
         a_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
         b_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
-
-        thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_i)
-        n_nbs = tuple(int(x)
-                      for x in _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_i))
-        lam = float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_i))
 
         if pass_i == 0:
             nb_mode: str = "xy"
@@ -370,6 +411,17 @@ def run(argv: list[str] | None = None) -> int:
             if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
                 disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
 
+        if plot_windows:
+            window_layouts.append({
+                "pass": pass_1b,
+                "n_wins": (n_wy, n_wx),
+                "overlap": overlap,
+                "shifts": shifts,
+            })
+
+        if pass_i == cfg.NR_PASSES - 1:
+            final_disp_final = disp_final
+
         # Persist stage-2 checkpoint.
         write_postprocessed_csv(
             paths.post_csv,
@@ -379,16 +431,110 @@ def run(argv: list[str] | None = None) -> int:
             disp_final=disp_final,
         )
 
-        if win_pos is not None:
-            write_win_pos_csv(paths.win_pos_csv, win_pos=win_pos)
+        # Window positions are no longer persisted; plotting uses `split_n_shift(plot=True)`.
 
         # Metadata is written last so it can be interpreted as
         # “this pass finished successfully and produced these artifacts”.
         write_meta_json(paths.meta_json, meta)
         prev_disp_final = disp_final
 
+    if final_disp_final is not None:
+        vel_final = final_disp_final * \
+            float(cfg.SCALE_M_PER_PX) / float(cfg.TIMESTEP_S)
+        flow_m3s = piv.vel2flow(
+            vel_final,
+            float(cfg.EXTRA_VEL_DIM_M),
+            float(cfg.IMAGE_WIDTH_M),
+            float(cfg.IMAGE_HEIGHT_M),
+            flow_direction=str(cfg.FLOW_DIRECTION),
+        )
+        flow_ls = flow_m3s * 1000.0
+
+        n_pairs, n_wy, n_wx, _ = vel_final.shape
+        pair_index = np.repeat(np.arange(n_pairs, dtype=np.int64), n_wy * n_wx)
+        win_y = np.tile(
+            np.repeat(np.arange(n_wy, dtype=np.int64), n_wx), n_pairs)
+        win_x = np.tile(np.arange(n_wx, dtype=np.int64), n_pairs * n_wy)
+        time_rep = np.repeat(time_s[:n_pairs], n_wy * n_wx)
+
+        vel_csv = run_dir / "velocity_final.csv"
+        np.savetxt(
+            vel_csv,
+            np.column_stack([
+                pair_index,
+                win_y,
+                win_x,
+                time_rep,
+                vel_final[..., 0].reshape(-1),
+                vel_final[..., 1].reshape(-1),
+            ]),
+            delimiter=",",
+            header="pair_index,win_y,win_x,time_s,vy_m_s,vx_m_s",
+            comments="",
+        )
+
+        flow_csv = run_dir / "flow_rate.csv"
+        np.savetxt(
+            flow_csv,
+            np.column_stack(
+                [np.arange(len(flow_ls)), time_s[: len(flow_ls)],
+                 flow_m3s, flow_ls]
+            ),
+            delimiter=",",
+            header="pair_index,time_s,flow_rate_m3_s,flow_rate_L_s",
+            comments="",
+        )
+
+        plots_dir = run_dir / "plots"
+        if cfg.PLOT_GLOBAL_FILTERS and filter_ranges:
+            viz.plot_filter_ranges(
+                filter_ranges, output_path=plots_dir / "filter_ranges.png")
+
+        if window_layouts:
+            if imgs is not None:
+                image_for_plots = np.asarray(imgs[0])
+            else:
+                base = load_images([cfg.IMAGE_LIST[0]], show_progress=False)
+                image_for_plots = np.asarray(base[0])
+                if cfg.CROP_ROI != (0, 0, 0, 0):
+                    image_for_plots = crop(image_for_plots, cfg.CROP_ROI)
+                if cfg.BACKGROUND_DIR:
+                    bg = cv.imread(cfg.BACKGROUND_DIR, cv.IMREAD_GRAYSCALE)
+                    if bg is not None:
+                        if cfg.CROP_ROI != (0, 0, 0, 0):
+                            bg = crop(bg, cfg.CROP_ROI)
+                        image_for_plots = np.clip(
+                            image_for_plots.astype(np.int32) -
+                            bg.astype(np.int32), 0, None
+                        ).astype(image_for_plots.dtype)
+
+            for layout in window_layouts:
+                viz.plot_window_layout(
+                    image_for_plots,
+                    layout["n_wins"],
+                    overlap=float(layout.get("overlap", 0.0)),
+                    shifts=layout.get("shifts"),
+                    shift_mode="before",
+                    title=f"Pass {layout['pass']:02d} windows",
+                    output_path=plots_dir /
+                    f"pass_{layout['pass']:02d}_windows.png",
+                )
+
+        if cfg.PLOT_FLOW_RATE:
+            model_tuple: tuple[np.ndarray, np.ndarray] | None = None
+            if cfg.PLOT_MODEL:
+                t_model, q_model = viz.gupta_model(
+                    cfg.MODEL_GENDER, cfg.MODEL_MASS, cfg.MODEL_HEIGHT)
+                model_tuple = (t_model, q_model)
+            viz.plot_flow_rate(
+                time_s[: len(flow_ls)],
+                flow_ls,
+                model=model_tuple,
+                output_path=plots_dir / "flow_rate.png",
+            )
+
     print(f"Done. Run directory: {run_dir}")
-    return 0
+    return run_dir
 
 
 def _per_pass(value: Any, idx: int) -> Any:
@@ -412,4 +558,7 @@ def _relpath_or_name(path: str, *, base_dir: str) -> str:
 
 
 if __name__ == "__main__":
-    raise SystemExit(run())
+    # Local/dev convenience: hardcode a config for quick manual testing.
+    # Keep `run()` itself as a callable API.
+    raise SystemExit(
+        run(config_file="examples/image_pair/input/config_image_pair.toml"))

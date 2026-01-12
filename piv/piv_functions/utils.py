@@ -92,7 +92,14 @@ def cart2polar(coords: np.ndarray) -> np.ndarray:
     return polar_coords
 
 
-def vel2flow(vel: np.ndarray, d: float, w: float) -> np.ndarray:
+def vel2flow(
+    vel: np.ndarray,
+    d: float,
+    image_width_m: float,
+    image_height_m: float,
+    *,
+    flow_direction: str = "x",
+) -> np.ndarray:
     """
     Convert velocity profile to volumetric flow rate.
     
@@ -110,7 +117,22 @@ def vel2flow(vel: np.ndarray, d: float, w: float) -> np.ndarray:
         np.ndarray: Flow rate array with shape (n_frames,) in m³/s
                    Multiply by 1000 to get L/s
     """    
-    vx_sum = np.nanmean(vel[..., 1], axis=(1, 2))  # Average over windows
-    flow_rate = vx_sum * d * w  # Calculate flow rate in m³/s
+    flow_dir = str(flow_direction).strip().lower()
+    if flow_dir == "x":
+        component = 1
+        cross_stream_width_m = float(image_height_m)
+    elif flow_dir == "y":
+        component = 0
+        cross_stream_width_m = float(image_width_m)
+    else:
+        raise ValueError("flow_direction must be 'x' or 'y'")
+
+    v = vel[..., component]
+    v_mean = np.nanmean(v, axis=(1, 2))
+    invalid = np.any(np.isnan(v), axis=(1, 2))
+    v_mean = v_mean.astype(float, copy=False)
+    v_mean[invalid] = np.nan
+
+    flow_rate = v_mean * float(d) * cross_stream_width_m  # m^3/s
 
     return flow_rate

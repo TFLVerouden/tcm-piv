@@ -102,12 +102,16 @@ MAX_VELOCITY: list[tuple[float, float]] | tuple[float, float]
 NEIGHBOURHOOD_SIZE: list[tuple[int, int, int]] | tuple[int, int, int]
 NEIGHBOURHOOD_THRESHOLD: list[int | tuple[int, int]] | int | tuple[int, int]
 TIME_SMOOTHING_LAMBDA: list[float] | float
+FLOW_DIRECTION: str
 
 # [visualisation]
 PLOT_MODEL: bool
 MODEL_GENDER: str
 MODEL_MASS: float
 MODEL_HEIGHT: float
+PLOT_GLOBAL_FILTERS: bool
+WINDOW_PLOT_ENABLED: list[bool]
+PLOT_FLOW_RATE: bool
 
 
 def read_file(config_file: Path | str | None) -> None:
@@ -276,7 +280,7 @@ def read_file(config_file: Path | str | None) -> None:
     )
 
     # [postprocessing]
-    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA
+    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION
     MAX_VELOCITY = _normalize_per_pass(
         postprocessing["max_velocity"],
         nr_passes=NR_PASSES,
@@ -320,12 +324,25 @@ def read_file(config_file: Path | str | None) -> None:
         element_parser=lambda v: float(v),
     )
 
+    FLOW_DIRECTION = str(postprocessing["flow_direction"]).strip().lower()
+    if FLOW_DIRECTION not in {"x", "y"}:
+        raise ValueError("postprocessing.flow_direction must be 'x' or 'y'")
+
     # [visualisation]
     global PLOT_MODEL, MODEL_GENDER, MODEL_MASS, MODEL_HEIGHT
+    global PLOT_GLOBAL_FILTERS, WINDOW_PLOT_ENABLED, PLOT_FLOW_RATE
     PLOT_MODEL = bool(visualisation["plot_model"])
     MODEL_GENDER = str(visualisation["model_gender"])
     MODEL_MASS = float(visualisation["model_mass"])
     MODEL_HEIGHT = float(visualisation["model_height"])
+
+    PLOT_GLOBAL_FILTERS = bool(visualisation["plot_global_filters"])
+    PLOT_FLOW_RATE = bool(visualisation["plot_flow_rate"])
+    WINDOW_PLOT_ENABLED = _normalize_per_pass(
+        visualisation["plot_window_layout"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: bool(v),
+    )
 
     # Offer to update config if runtime adjustments changed values
     updated_snapshot = deepcopy(original_snapshot)
