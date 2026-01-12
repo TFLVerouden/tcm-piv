@@ -1,4 +1,4 @@
-nr_passes = 1
+nr_passes = 2
 
 [source]
 image_dir = "examples/image_pair/input"
@@ -12,13 +12,13 @@ calib_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/image_pair/output/
 calib_spacing_mm = 1.0
 
 [preprocessing]
-downsample_factor = [1]
-background_dir = "examples/image_pair/output/background_260110_003815.tif"
+downsample_factor = [4, 1]
+background_dir = ""
 crop_roi = [0, 0, 0, 0]
 
 [correlation]
-corrs_to_sum = 1
-nr_windows = [2, 2]
+corrs_to_sum = [1, 1]
+nr_windows = [[1, 1],[8, 1]]
 window_overlap = 0
 
 [displacement]

@@ -77,6 +77,8 @@ from tcm_piv.preprocessing import crop, generate_background
 #   to sanity-check parsing and the “update config with backup” flow.
 NR_PASSES: int
 
+# TODO: Add rectangle filter options?
+
 # [source]
 FRAMES_TO_USE: str | list[int]
 EXTRA_VEL_DIM_M: float

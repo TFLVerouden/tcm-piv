@@ -73,7 +73,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from typing import Any, cast
+from typing import Any
 
 import cv2 as cv
 import numpy as np
@@ -145,7 +145,10 @@ def run(argv: list[str] | None = None) -> int:
 
     # Timebase used for plotting / any temporal processing.
     # `time_s` has length (NR_IMAGES - 1), matching the number of image pairs.
-    frames = _frames_for_timebase()
+    if isinstance(cfg.FRAMES_TO_USE, list):
+        frames = cfg.FRAMES_TO_USE
+    else:
+        frames = list(range(1, cfg.NR_IMAGES + 1))
     time_s = piv.get_time(frames, float(cfg.TIMESTEP_S))
 
     # Lazily loaded image stack. We only load if we need correlation.
@@ -218,7 +221,21 @@ def run(argv: list[str] | None = None) -> int:
             # Full computation path: we need images to compute correlations.
             # We load once and reuse across passes.
             if imgs is None:
-                imgs = _load_and_preprocess_images()
+                imgs = load_images(cfg.IMAGE_LIST, show_progress=True)
+                imgs = np.asarray(imgs)
+
+                if cfg.CROP_ROI != (0, 0, 0, 0):
+                    imgs = crop(imgs, cfg.CROP_ROI)
+
+                if cfg.BACKGROUND_DIR:
+                    bg = cv.imread(cfg.BACKGROUND_DIR, cv.IMREAD_GRAYSCALE)
+                    if bg is not None:
+                        if cfg.CROP_ROI != (0, 0, 0, 0):
+                            bg = crop(bg, cfg.CROP_ROI)
+                        imgs = np.clip(
+                            imgs.astype(np.int32) -
+                            bg.astype(np.int32), 0, None
+                        ).astype(imgs.dtype)
 
             # Later passes refine the search region by shifting windows based
             # on the previous pass result.
@@ -275,11 +292,83 @@ def run(argv: list[str] | None = None) -> int:
 
         # Stage 2: postprocess the multi-peak results into a usable single-peak
         # displacement field, applying outlier and neighbour filtering.
-        disp_glo, disp_nbs, disp_final = _postprocess_pass(
-            pass_index_0b=pass_i,
-            disp_unf=disp_unf,
-            time_s=time_s,
+        vx_max, vy_max = _per_pass(cfg.MAX_VELOCITY, pass_i)
+        a_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
+        b_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
+
+        thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_i)
+        n_nbs = tuple(int(x)
+                      for x in _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_i))
+        lam = float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_i))
+
+        if pass_i == 0:
+            nb_mode: str = "xy"
+            nb_replace: bool | str = False
+            nb_thr_unit = "std"
+        elif pass_i == 1:
+            nb_mode = "r"
+            nb_replace = True
+            nb_thr_unit = "std"
+        else:
+            nb_mode = "xy"
+            if isinstance(thr, tuple):
+                nb_replace = "closest"
+                nb_thr_unit = "pxs"
+            else:
+                nb_replace = True
+                nb_thr_unit = "std"
+
+        disp_glo_5d = np.asarray(
+            piv.filter_outliers(
+                "semicircle_rect",
+                disp_unf,
+                a=a_y,
+                b=b_x,
+                verbose=True,
+            )
         )
+
+        if len(n_nbs) != 3:
+            raise ValueError(
+                f"neighbourhood_size must have 3 elements, got {n_nbs}")
+
+        if nb_replace == "closest":
+            disp_nbs_5d = piv.filter_neighbours(
+                disp_glo_5d,
+                thr=thr,  # type: ignore[arg-type]
+                thr_unit=nb_thr_unit,
+                n_nbs=n_nbs,
+                mode=nb_mode,
+                replace=nb_replace,
+                verbose=True,
+                timing=True,
+            )
+
+            disp_glo = piv.strip_peaks(
+                disp_glo_5d, axis=-2, mode="reduce", verbose=False
+            )
+            disp_nbs = piv.strip_peaks(
+                disp_nbs_5d, axis=-2, mode="reduce", verbose=True
+            )
+            disp_final = disp_nbs
+        else:
+            disp_glo = piv.strip_peaks(
+                disp_glo_5d, axis=-2, mode="reduce", verbose=True
+            )
+            disp_nbs = piv.filter_neighbours(
+                disp_glo,
+                thr=thr,  # type: ignore[arg-type]
+                n_nbs=n_nbs,
+                mode=nb_mode,
+                replace=nb_replace,
+                verbose=True,
+                timing=True,
+            )
+            disp_final = disp_nbs
+
+        if lam and lam > 0:
+            if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
+                disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
 
         # Persist stage-2 checkpoint.
         write_postprocessed_csv(
@@ -320,212 +409,6 @@ def _relpath_or_name(path: str, *, base_dir: str) -> str:
         return str(Path(path).resolve().relative_to(Path(base_dir).resolve()))
     except Exception:
         return Path(path).name
-
-
-def _load_and_preprocess_images() -> np.ndarray:
-    """Load all images and apply the preprocessing specified in config.
-
-    Important: this can be expensive. `run()` deliberately delays calling
-    this until it knows correlation work is required (i.e. no usable
-    peak-detection checkpoint exists).
-    """
-
-    imgs = load_images(cfg.IMAGE_LIST, show_progress=True)
-    imgs = np.asarray(imgs)
-
-    if cfg.CROP_ROI != (0, 0, 0, 0):
-        imgs = crop(imgs, cfg.CROP_ROI)
-
-    if cfg.BACKGROUND_DIR:
-        bg = cv.imread(cfg.BACKGROUND_DIR, cv.IMREAD_GRAYSCALE)
-        if bg is None:
-            raise RuntimeError(
-                f"Failed to load background image: {cfg.BACKGROUND_DIR}")
-        if cfg.CROP_ROI != (0, 0, 0, 0):
-            bg = crop(bg, cfg.CROP_ROI)
-
-        imgs_i32 = imgs.astype(np.int32)
-        bg_i32 = bg.astype(np.int32)
-        imgs = np.clip(imgs_i32 - bg_i32, 0, None).astype(imgs.dtype)
-
-    return imgs
-
-
-def _frames_for_timebase() -> list[int]:
-    """Determine the frame indices used to compute time stamps.
-
-    `cfg.FRAMES_TO_USE` is either:
-    - a list of integers, or
-    - the string "all", which is interpreted as 1..NR_IMAGES (inclusive)
-
-    These indices are passed to `piv.get_time()` to produce `time_s`.
-    """
-
-    if isinstance(cfg.FRAMES_TO_USE, list):
-        return cfg.FRAMES_TO_USE
-    # When "all" is used, we typically deal with 1-based frame naming.
-    return list(range(1, cfg.NR_IMAGES + 1))
-
-
-def _dmax_px(*, vx_max_m_s: float, vy_max_m_s: float) -> tuple[float, float]:
-    """Convert velocity limits from m/s into displacement limits in pixels.
-
-    Postprocessing outlier filtering works in pixel-displacement space.
-    Given a timestep (s) and a spatial scale (m/px), the maximum displacement
-    in pixels is computed as:
-    `d_px = v_m_s * timestep_s / scale_m_per_px`
-    """
-
-    if not cfg.SCALE_M_PER_PX:
-        raise RuntimeError("Missing SCALE_M_PER_PX from calibration metadata")
-    if not cfg.TIMESTEP_S:
-        raise RuntimeError("Missing TIMESTEP_S from camera metadata")
-    a_y = vy_max_m_s * cfg.TIMESTEP_S / cfg.SCALE_M_PER_PX
-    b_x = vx_max_m_s * cfg.TIMESTEP_S / cfg.SCALE_M_PER_PX
-    return float(a_y), float(b_x)
-
-
-def _odd_at_most(value: int, max_value: int) -> int:
-    """Clamp to [1, max_value] and force the result to be odd.
-
-    Neighbourhood filters often assume an odd window size so there is a
-    well-defined center element.
-    """
-
-    v = int(value)
-    m = int(max_value)
-    if m <= 1:
-        return 1
-    v = min(max(v, 1), m)
-    if v % 2 == 0:
-        v -= 1
-    return max(v, 1)
-
-
-def _clamp_n_nbs(n_nbs: tuple[int, int, int], *, shape_3: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Clamp neighbourhood sizes to the available (corrs, win_y, win_x) shape."""
-
-    n_corrs, n_wy, n_wx = shape_3
-    return (
-        _odd_at_most(n_nbs[0], n_corrs),
-        _odd_at_most(n_nbs[1], n_wy),
-        _odd_at_most(n_nbs[2], n_wx),
-    )
-
-
-def _postprocess_pass(
-    *,
-    pass_index_0b: int,
-    disp_unf: np.ndarray,
-    time_s: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray | None, np.ndarray]:
-    """Return (disp_glo, disp_nbs, disp_final) in 4D form.
-
-    Notes:
-    - disp_unf is 5D (pairs, wy, wx, peaks, 2).
-    - Some replacement modes ("closest") require keeping multiple peaks until
-      after neighbour filtering.
-    """
-
-    # max_velocity config is (vx_max, vy_max) in m/s.
-    # We convert it to pixel displacement limits for global outlier filtering.
-    vx_max, vy_max = _per_pass(cfg.MAX_VELOCITY, pass_index_0b)
-    a_y, b_x = _dmax_px(vx_max_m_s=float(vx_max), vy_max_m_s=float(vy_max))
-
-    thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_index_0b)
-    n_nbs = _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_index_0b)
-    lam = float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_index_0b))
-
-    # Neighbour filtering behavior differs by pass, to mirror the legacy
-    # workflow in `piv/piv.py`. These knobs are intentionally *not* exposed in
-    # the TOML yet; if you want them configurable, we can add config keys.
-    if pass_index_0b == 0:
-        nb_mode: str = "xy"
-        nb_replace: bool | str = False
-        nb_thr_unit = "std"
-    elif pass_index_0b == 1:
-        nb_mode = "r"
-        nb_replace = True  # median replacement
-        nb_thr_unit = "std"
-    else:
-        nb_mode = "xy"
-        if isinstance(thr, tuple):
-            nb_replace = "closest"
-            nb_thr_unit = "pxs"
-        else:
-            nb_replace = True
-            nb_thr_unit = "std"
-
-    # Global outlier filter is applied *before* selecting a single peak.
-    # At this stage we still carry the extra "peaks" dimension.
-    disp_glo_5d = np.asarray(
-        piv.filter_outliers(
-            "semicircle_rect",
-            disp_unf,
-            a=a_y,
-            b=b_x,
-            verbose=True,
-        )
-    )
-
-    # Safety: clamp neighbourhood sizes to the available data dimensions.
-    # The neighbourhood size is (n_corrs, n_wy, n_wx) and must be odd.
-    # Make shapes explicit for type-checkers.
-    disp_shape_3: tuple[int, int, int] = (
-        int(disp_glo_5d.shape[0]),
-        int(disp_glo_5d.shape[1]),
-        int(disp_glo_5d.shape[2]),
-    )
-    n_nbs_t = tuple(int(x) for x in n_nbs)
-    if len(n_nbs_t) != 3:
-        raise ValueError(
-            f"neighbourhood_size must have 3 elements, got {n_nbs_t}")
-    n_nbs = _clamp_n_nbs(
-        cast(tuple[int, int, int], n_nbs_t), shape_3=disp_shape_3)
-
-    if nb_replace == "closest":
-        # Keep multiple peaks for neighbour filter; strip afterwards.
-        disp_nbs_5d = piv.filter_neighbours(
-            disp_glo_5d,
-            thr=thr,  # type: ignore[arg-type]
-            thr_unit=nb_thr_unit,
-            n_nbs=n_nbs,
-            mode=nb_mode,
-            replace=nb_replace,
-            verbose=True,
-            timing=True,
-        )
-
-        disp_glo = piv.strip_peaks(
-            disp_glo_5d, axis=-2, mode="reduce", verbose=False)
-        disp_nbs = piv.strip_peaks(
-            disp_nbs_5d, axis=-2, mode="reduce", verbose=True)
-        disp_final = disp_nbs
-    else:
-        disp_glo = piv.strip_peaks(
-            disp_glo_5d, axis=-2, mode="reduce", verbose=True)
-        disp_nbs = piv.filter_neighbours(
-            disp_glo,
-            thr=thr,  # type: ignore[arg-type]
-            n_nbs=n_nbs,
-            mode=nb_mode,
-            replace=nb_replace,
-            verbose=True,
-            timing=True,
-        )
-        disp_final = disp_nbs
-
-    # Optional temporal smoothing.
-    # This is only meaningful for time series at a single window location
-    # (n_wy, n_wx) == (1, 1). For multi-window fields, smoothing would need a
-    # different approach (or be applied per-window).
-    if lam and lam > 0:
-        # `smooth()` expects something that can be squeezed to (n_time, 2).
-        # This is typically pass 1 with a single window and many time points.
-        if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
-            disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
-
-    return disp_glo, disp_nbs, disp_final
 
 
 if __name__ == "__main__":
