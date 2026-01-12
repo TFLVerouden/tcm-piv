@@ -82,6 +82,7 @@ import tcm_piv as piv
 import tcm_piv.visualisation as viz
 from tcm_piv import init_config as cfg
 from tcm_piv.preprocessing import crop
+from tcm_utils.cough_model import CoughModel
 from tcm_piv.checkpoints import (
     init_run_dir,
     load_postprocessed_csv,
@@ -341,6 +342,8 @@ def run(
         # displacement field, applying outlier and neighbour filtering.
         a_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
         b_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
+        a_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
+        b_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
 
         if pass_i == 0:
             nb_mode: str = "xy"
@@ -359,15 +362,50 @@ def run(
                 nb_replace = True
                 nb_thr_unit = "std"
 
+        outlier_mode = str(cfg.OUTLIER_FILTER_MODE).strip().lower()
+        flow_dir = str(cfg.FLOW_DIRECTION).strip().lower()
+        if flow_dir not in {"x", "y"}:
+            raise ValueError("cfg.FLOW_DIRECTION must be 'x' or 'y'")
+
+        if outlier_mode == "semicircle_rect":
+            # `filter_outliers('semicircle_rect')` is asymmetric in the second
+            # coordinate ("x"). Our displacement coords are (dy, dx).
+            #
+            # If flow is along x: keep as-is (streamwise=dx, cross-stream=dy).
+            # If flow is along y: swap axes (streamwise=dy, cross-stream=dx).
+            if flow_dir == "x":
+                a_px: float | np.ndarray = a_y
+                b_px: float | None = b_x
+                disp_for_filter = disp_unf
+                unswap: bool = False
+            else:  # flow_dir == "y"
+                a_px = a_x
+                b_px = b_y
+                disp_for_filter = disp_unf[..., [1, 0]]
+                unswap = True
+        elif outlier_mode == "circle":
+            # Use the larger of the two maxima as the circle radius.
+            vmax = float(max(abs(vx_max), abs(vy_max)))
+            a_px = vmax * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
+            b_px = None
+            disp_for_filter = disp_unf
+            unswap = False
+        else:
+            raise ValueError(
+                "cfg.OUTLIER_FILTER_MODE must be 'semicircle_rect' or 'circle'"
+            )
+
         disp_glo_5d = np.asarray(
             piv.filter_outliers(
-                "semicircle_rect",
-                disp_unf,
-                a=a_y,
-                b=b_x,
+                outlier_mode,
+                disp_for_filter,
+                a=a_px,
+                b=b_px,
                 verbose=True,
             )
         )
+        if unswap:
+            disp_glo_5d = disp_glo_5d[..., [1, 0]]
 
         if len(n_nbs) != 3:
             raise ValueError(
@@ -488,9 +526,14 @@ def run(
         plots_dir = run_dir / "plots"
         if cfg.PLOT_GLOBAL_FILTERS and filter_ranges:
             viz.plot_filter_ranges(
-                filter_ranges, output_path=plots_dir / "filter_ranges.png")
+                filter_ranges,
+                mode=str(cfg.OUTLIER_FILTER_MODE),
+                flow_direction=str(cfg.FLOW_DIRECTION),
+                output_path=plots_dir / "filter_ranges.png",
+            )
 
-        if window_layouts:
+        image_for_plots: np.ndarray | None = None
+        if window_layouts or cfg.EXPORT_VELOCITY_PROFILES_PDF:
             if imgs is not None:
                 image_for_plots = np.asarray(imgs[0])
             else:
@@ -508,6 +551,7 @@ def run(
                             bg.astype(np.int32), 0, None
                         ).astype(image_for_plots.dtype)
 
+        if window_layouts and image_for_plots is not None:
             for layout in window_layouts:
                 viz.plot_window_layout(
                     image_for_plots,
@@ -520,11 +564,35 @@ def run(
                     f"pass_{layout['pass']:02d}_windows.png",
                 )
 
+        if cfg.EXPORT_VELOCITY_PROFILES_PDF and image_for_plots is not None:
+            final_pass_i = int(cfg.NR_PASSES) - 1
+            n_wins_final = tuple(_per_pass(cfg.NR_WINDOWS, final_pass_i))
+            overlap_final = float(_per_pass(cfg.WINDOW_OVERLAP, final_pass_i))
+            ds_fac_final = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, final_pass_i))
+            viz.export_velocity_profiles_pdf(
+                vel_final=vel_final,
+                image=image_for_plots,
+                n_wins=(int(n_wins_final[0]), int(n_wins_final[1])),
+                overlap=overlap_final,
+                ds_fac=ds_fac_final,
+                scale_m_per_px=float(cfg.SCALE_M_PER_PX),
+                flow_direction=str(cfg.FLOW_DIRECTION),
+                time_s=time_s[: len(flow_ls)],
+                output_path=plots_dir / "velocity_profiles.pdf",
+            )
+
         if cfg.PLOT_FLOW_RATE:
             model_tuple: tuple[np.ndarray, np.ndarray] | None = None
             if cfg.PLOT_MODEL:
-                t_model, q_model = viz.gupta_model(
-                    cfg.MODEL_GENDER, cfg.MODEL_MASS, cfg.MODEL_HEIGHT)
+                cough = CoughModel.from_gupta(
+                    gender=cfg.MODEL_GENDER,
+                    weight_kg=float(cfg.MODEL_MASS),
+                    height_m=float(cfg.MODEL_HEIGHT),
+                )
+                t_model, q_model = cough.flow(
+                    time_s=time_s[: len(flow_ls)],
+                    units="L/s",
+                )
                 model_tuple = (t_model, q_model)
             viz.plot_flow_rate(
                 time_s[: len(flow_ls)],
@@ -560,5 +628,7 @@ def _relpath_or_name(path: str, *, base_dir: str) -> str:
 if __name__ == "__main__":
     # Local/dev convenience: hardcode a config for quick manual testing.
     # Keep `run()` itself as a callable API.
-    raise SystemExit(
-        run(config_file="examples/image_pair/input/config_image_pair.toml"))
+    run_dir = run(
+        config_file="examples/image_pair/input/config_image_pair.toml")
+    print(run_dir)
+    raise SystemExit(0)

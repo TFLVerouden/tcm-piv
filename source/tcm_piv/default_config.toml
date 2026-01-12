@@ -54,8 +54,12 @@ min_peak_distance = 5
 
 [postprocessing]
 # Per-pass
-max_velocity = [75.0, 10.0]
 neighbourhood_size = [3, 3, 3]
+
+# Global outlier filter mode passed to `tcm_piv.postprocessing.filter_outliers`.
+# Allowed: "semicircle_rect", "circle".
+outlier_filter_mode = "semicircle_rect"
+max_velocity = [75.0, 10.0]
 
 # Which in-plane velocity component represents the flow direction.
 # Used by the final flow-rate export.
@@ -75,3 +79,4 @@ model_height = 1.93
 plot_global_filters = false
 plot_window_layout = false
 plot_flow_rate = false
+export_velocity_profiles_pdf = false

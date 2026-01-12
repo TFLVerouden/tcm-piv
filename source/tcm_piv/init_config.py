@@ -103,6 +103,7 @@ NEIGHBOURHOOD_SIZE: list[tuple[int, int, int]] | tuple[int, int, int]
 NEIGHBOURHOOD_THRESHOLD: list[int | tuple[int, int]] | int | tuple[int, int]
 TIME_SMOOTHING_LAMBDA: list[float] | float
 FLOW_DIRECTION: str
+OUTLIER_FILTER_MODE: str
 
 # [visualisation]
 PLOT_MODEL: bool
@@ -112,6 +113,7 @@ MODEL_HEIGHT: float
 PLOT_GLOBAL_FILTERS: bool
 WINDOW_PLOT_ENABLED: list[bool]
 PLOT_FLOW_RATE: bool
+EXPORT_VELOCITY_PROFILES_PDF: bool
 
 
 def read_file(config_file: Path | str | None) -> None:
@@ -280,7 +282,7 @@ def read_file(config_file: Path | str | None) -> None:
     )
 
     # [postprocessing]
-    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION
+    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, OUTLIER_FILTER_MODE
     MAX_VELOCITY = _normalize_per_pass(
         postprocessing["max_velocity"],
         nr_passes=NR_PASSES,
@@ -324,13 +326,19 @@ def read_file(config_file: Path | str | None) -> None:
         element_parser=lambda v: float(v),
     )
 
+    OUTLIER_FILTER_MODE = str(postprocessing["outlier_filter_mode"]).strip().lower()
+    if OUTLIER_FILTER_MODE not in {"semicircle_rect", "circle"}:
+        raise ValueError(
+            "postprocessing.outlier_filter_mode must be 'semicircle_rect' or 'circle'"
+        )
+
     FLOW_DIRECTION = str(postprocessing["flow_direction"]).strip().lower()
     if FLOW_DIRECTION not in {"x", "y"}:
         raise ValueError("postprocessing.flow_direction must be 'x' or 'y'")
 
     # [visualisation]
     global PLOT_MODEL, MODEL_GENDER, MODEL_MASS, MODEL_HEIGHT
-    global PLOT_GLOBAL_FILTERS, WINDOW_PLOT_ENABLED, PLOT_FLOW_RATE
+    global PLOT_GLOBAL_FILTERS, WINDOW_PLOT_ENABLED, PLOT_FLOW_RATE, EXPORT_VELOCITY_PROFILES_PDF
     PLOT_MODEL = bool(visualisation["plot_model"])
     MODEL_GENDER = str(visualisation["model_gender"])
     MODEL_MASS = float(visualisation["model_mass"])
@@ -338,6 +346,9 @@ def read_file(config_file: Path | str | None) -> None:
 
     PLOT_GLOBAL_FILTERS = bool(visualisation["plot_global_filters"])
     PLOT_FLOW_RATE = bool(visualisation["plot_flow_rate"])
+    EXPORT_VELOCITY_PROFILES_PDF = bool(
+        visualisation["export_velocity_profiles_pdf"]
+    )
     WINDOW_PLOT_ENABLED = _normalize_per_pass(
         visualisation["plot_window_layout"],
         nr_passes=NR_PASSES,

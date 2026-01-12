@@ -1,4 +1,4 @@
-nr_passes = 2
+nr_passes = 3
 
 [source]
 image_dir = "examples/image_pair/input"
@@ -12,18 +12,18 @@ calib_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/image_pair/output/
 calib_spacing_mm = 1.0
 
 [preprocessing]
-downsample_factor = [4, 1]
+downsample_factor = [4, 1, 1]
 background_dir = ""
 crop_roi = [0, 0, 0, 0]
 
 [correlation]
-corrs_to_sum = [1, 1]
-nr_windows = [[1, 1],[1, 8]]
+corrs_to_sum = [1, 1, 1]
+nr_windows = [[1, 1],[1, 8],[1, 24]]
 window_overlap = 0
 
 [displacement]
 nr_peaks = 5
-min_peak_distance = 5
+min_peak_distance = 1
 
 [postprocessing]
 max_velocity = [200, 200]
@@ -40,3 +40,4 @@ model_height = 1.93
 plot_global_filters = true
 plot_window_layout = true
 plot_flow_rate = true
+export_velocity_profiles_pdf = true
