@@ -17,3 +17,4 @@ Configuration is TOML-based (Python >= 3.11).
 - max velocity per 3
 - different modi for different passes
 - write better explanation
+- flow rate nan
