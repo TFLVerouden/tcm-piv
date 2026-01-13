@@ -23,4 +23,4 @@ dependencies = [
 package-dir = {"" = "source"}
 
 [tool.setuptools.package-data]
-tcm_piv = ["*.toml"]
+tcm_piv = ["config/*.toml"]

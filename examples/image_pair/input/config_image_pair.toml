@@ -19,14 +19,14 @@ crop_roi = [0, 0, 0, 0]
 [correlation]
 corrs_to_sum = [1, 1, 1]
 nr_windows = [[1, 1],[1, 8],[1, 24]]
-window_overlap = 0
+window_overlap = 0.5
 
 [displacement]
-nr_peaks = 5
+nr_peaks = 10
 min_peak_distance = 1
 
 [postprocessing]
-max_velocity = [200, 200]
+max_velocity = [10, 200]
 neighbourhood_size = [1, 1, 1]
 neighbourhood_threshold = 5
 time_smoothing_lambda = 0

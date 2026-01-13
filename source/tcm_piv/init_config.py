@@ -326,7 +326,8 @@ def read_file(config_file: Path | str | None) -> None:
         element_parser=lambda v: float(v),
     )
 
-    OUTLIER_FILTER_MODE = str(postprocessing["outlier_filter_mode"]).strip().lower()
+    OUTLIER_FILTER_MODE = str(
+        postprocessing["outlier_filter_mode"]).strip().lower()
     if OUTLIER_FILTER_MODE not in {"semicircle_rect", "circle"}:
         raise ValueError(
             "postprocessing.outlier_filter_mode must be 'semicircle_rect' or 'circle'"
@@ -483,7 +484,7 @@ def _read_packaged_default_config() -> dict[str, Any]:
     try:
         from importlib.resources import files
 
-        default_path = files("tcm_piv").joinpath("default_config.toml")
+        default_path = files("tcm_piv").joinpath("config/default_config.toml")
         with default_path.open("rb") as fp:
             return tomllib.load(fp)
     except Exception as exc:  # pragma: no cover
@@ -625,4 +626,4 @@ def _diff_dicts(original: dict[str, Any], updated: dict[str, Any]) -> list[tuple
 
 
 if __name__ == "__main__":
-    read_file(Path("src/tcm_piv/config.toml"))
+    read_file(Path(__file__).resolve().parent / "config" / "config.toml")

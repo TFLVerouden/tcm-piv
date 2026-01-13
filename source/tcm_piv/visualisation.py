@@ -112,10 +112,10 @@ def plot_filter_ranges(
     if ranges:
         vx_max = max(abs(vx) for vx, _ in ranges)
         vy_max = max(abs(vy) for _, vy in ranges)
-        pad_x = vx_max * 0.1 if vx_max else 1.0
-        pad_y = vy_max * 0.1 if vy_max else 1.0
-        ax.set_xlim(-(vx_max + pad_x), vx_max + pad_x)
-        ax.set_ylim(-(vy_max + pad_y), vy_max + pad_y)
+        lim = max(vx_max, vy_max)
+        pad = lim * 0.1 if lim else 1.0
+        ax.set_xlim(-(lim + pad), lim + pad)
+        ax.set_ylim(-(lim + pad), lim + pad)
 
     ax.set_xlabel("v_x limit (m/s)")
     ax.set_ylabel("v_y limit (m/s)")
@@ -295,11 +295,14 @@ def export_velocity_profiles_pdf(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output_path) as pdf:
         for pair_i in range(n_pairs):
-            stream = np.nanmean(vel_final[pair_i, :, :, stream_idx], axis=0)[order]
-            cross = np.nanmean(vel_final[pair_i, :, :, cross_idx], axis=0)[order]
+            stream = np.nanmean(
+                vel_final[pair_i, :, :, stream_idx], axis=0)[order]
+            cross = np.nanmean(
+                vel_final[pair_i, :, :, cross_idx], axis=0)[order]
 
             fig, ax = plt.subplots(figsize=(6.5, 6.5))
-            ax.plot(stream, dist_profile, "-o", label=stream_label, markersize=3)
+            ax.plot(stream, dist_profile, "-o",
+                    label=stream_label, markersize=3)
             ax.plot(cross, dist_profile, "-o", label=cross_label, markersize=3)
 
             ax.set_xlabel("Velocity (m/s)")

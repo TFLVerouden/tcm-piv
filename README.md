@@ -5,5 +5,5 @@ Twente Cough Machine - Particle Image Velocimetry
 
 Configuration is TOML-based (Python >= 3.11).
 
-- Example config: [src/tcm_piv/config.toml](src/tcm_piv/config.toml)
-- Packaged defaults: [src/tcm_piv/default_config.toml](src/tcm_piv/default_config.toml)
+- Example config: [source/tcm_piv/config/config.toml](source/tcm_piv/config/config.toml)
+- Packaged defaults: [source/tcm_piv/config/default_config.toml](source/tcm_piv/config/default_config.toml)
