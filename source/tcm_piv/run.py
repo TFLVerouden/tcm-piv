@@ -628,7 +628,6 @@ def _relpath_or_name(path: str, *, base_dir: str) -> str:
 if __name__ == "__main__":
     # Local/dev convenience: hardcode a config for quick manual testing.
     # Keep `run()` itself as a callable API.
-    run_dir = run(
-        config_file="examples/image_pair/input/config_image_pair.toml")
+    run_dir = run()
     print(run_dir)
     raise SystemExit(0)
