@@ -58,12 +58,12 @@ def plot_filter_ranges(
             # right half: rectangle with vx in [0, b] (= vx) and vy in [-a, a]
             if flow_dir == "x":
                 # streamwise = vx (x-axis), cross-stream = vy (y-axis)
-                a = float(vy)
-                b = float(vx)
+                cross_limit = float(vy)
+                stream_limit = float(vx)
                 ax.add_patch(
                     Wedge(
                         (0.0, 0.0),
-                        r=a,
+                        r=cross_limit,
                         theta1=90.0,
                         theta2=270.0,
                         fill=False,
@@ -73,21 +73,21 @@ def plot_filter_ranges(
                 )
                 ax.add_patch(
                     Rectangle(
-                        (0.0, -a),
-                        b,
-                        2 * a,
+                        (0.0, -cross_limit),
+                        stream_limit,
+                        2 * cross_limit,
                         fill=False,
                         linewidth=1.5,
                     )
                 )
             else:
                 # streamwise = vy (y-axis), cross-stream = vx (x-axis)
-                a = float(vx)
-                b = float(vy)
+                cross_limit = float(vx)
+                stream_limit = float(vy)
                 ax.add_patch(
                     Wedge(
                         (0.0, 0.0),
-                        r=a,
+                        r=cross_limit,
                         theta1=180.0,
                         theta2=360.0,
                         fill=False,
@@ -97,26 +97,26 @@ def plot_filter_ranges(
                 )
                 ax.add_patch(
                     Rectangle(
-                        (-a, 0.0),
-                        2 * a,
-                        b,
+                        (-cross_limit, 0.0),
+                        2 * cross_limit,
+                        stream_limit,
                         fill=False,
                         linewidth=1.5,
                     )
                 )
         elif pass_mode == "circle":
-            r = float(max(abs(vx), abs(vy)))
+            radius = float(max(abs(vx), abs(vy)))
             ax.add_patch(
                 Circle(
                     (0.0, 0.0),
-                    radius=r,
+                    radius=radius,
                     fill=False,
                     linewidth=1.5,
                     label=f"Pass {idx}",
                 )
             )
         else:
-            rect = Rectangle(
+            rect_patch = Rectangle(
                 (-vx, -vy),
                 2 * vx,
                 2 * vy,
@@ -124,7 +124,7 @@ def plot_filter_ranges(
                 linewidth=1.5,
                 label=f"Pass {idx}",
             )
-            ax.add_patch(rect)
+            ax.add_patch(rect_patch)
 
     if ranges:
         vx_max = max(abs(vx) for vx, _ in ranges)
@@ -244,10 +244,10 @@ def plot_correlation_map(
     if corr.ndim != 2:
         raise ValueError("corr must be a 2D array")
 
-    c = np.asarray(center_yx).reshape(-1)
-    if c.size != 2:
+    center_arr = np.asarray(center_yx).reshape(-1)
+    if center_arr.size != 2:
         raise ValueError("center_yx must have 2 elements (y, x)")
-    cy, cx = int(c[0]), int(c[1])
+    cy, cx = int(center_arr[0]), int(center_arr[1])
 
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(corr, cmap="viridis", origin="upper")
@@ -324,24 +324,24 @@ def export_velocity_profiles_pdf(
 
     # Geometry: compute window centres using the same split_n_shift logic.
     # If ds_fac>1, match correlation's downsampled geometry and scale centres back.
-    img = np.asarray(image)
-    if img.ndim != 2:
+    image_arr = np.asarray(image)
+    if image_arr.ndim != 2:
         raise ValueError("image must be a 2D array")
 
-    ds = int(ds_fac)
-    if ds < 1:
+    downsample_factor = int(ds_fac)
+    if downsample_factor < 1:
         raise ValueError("ds_fac must be >= 1")
 
-    if ds > 1:
+    if downsample_factor > 1:
         # `downsample` expects a stack; this matches `correlation.calc_corrs`.
         from tcm_piv.preprocessing import downsample
 
-        img_ds = downsample(img[np.newaxis, ...], ds)[0]
+        image_downsampled = downsample(image_arr[np.newaxis, ...], downsample_factor)[0]
     else:
-        img_ds = img
+        image_downsampled = image_arr
 
     _, win_pos = split_n_shift(
-        img_ds,
+        image_downsampled,
         (n_y, n_x),
         overlap=float(overlap),
         shift=(0, 0),
@@ -351,38 +351,39 @@ def export_velocity_profiles_pdf(
 
     # Use x-centres for the "distance from centre" axis.
     x_centres_px_ds = win_pos[..., 1]  # (n_y, n_x)
-    x_centres_px = x_centres_px_ds * ds
-    x0_px = img.shape[1] / 2.0
-    dist_m = (x_centres_px - x0_px) * float(scale_m_per_px)
+    x_centres_px = x_centres_px_ds * downsample_factor
+    x_center_px = image_arr.shape[1] / 2.0
+    distances_m = (x_centres_px - x_center_px) * float(scale_m_per_px)
 
     # Collapse y dimension: profile vs x index.
-    dist_profile = np.nanmean(dist_m, axis=0)  # (n_x,)
-    order = np.argsort(dist_profile)
-    dist_profile = dist_profile[order]
+    distance_profile_m = np.nanmean(distances_m, axis=0)  # (n_x,)
+    sort_indices = np.argsort(distance_profile_m)
+    distance_profile_m = distance_profile_m[sort_indices]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output_path) as pdf:
         for pair_i in range(n_pairs):
             stream = np.nanmean(
-                vel_final[pair_i, :, :, stream_idx], axis=0)[order]
+                vel_final[pair_i, :, :, stream_idx], axis=0)[sort_indices]
             cross = np.nanmean(
-                vel_final[pair_i, :, :, cross_idx], axis=0)[order]
+                vel_final[pair_i, :, :, cross_idx], axis=0)[sort_indices]
 
-            interp_cols = None
+            interpolated_columns = None
             if interpolated_mask is not None:
                 # Mark a column if any y-position in that column was interpolated.
-                interp_cols = np.any(
-                    interpolated_mask[pair_i, :, :], axis=0)[order]
+                interpolated_columns = np.any(
+                    interpolated_mask[pair_i, :, :], axis=0)[sort_indices]
 
             fig, ax = plt.subplots(figsize=(6.5, 6.5))
-            ax.plot(stream, dist_profile, "-o",
+            ax.plot(stream, distance_profile_m, "-o",
                     label=stream_label, markersize=3)
-            ax.plot(cross, dist_profile, "-o", label=cross_label, markersize=3)
+            ax.plot(cross, distance_profile_m, "-o",
+                    label=cross_label, markersize=3)
 
-            if interp_cols is not None and np.any(interp_cols):
+            if interpolated_columns is not None and np.any(interpolated_columns):
                 ax.plot(
-                    stream[interp_cols],
-                    dist_profile[interp_cols],
+                    stream[interpolated_columns],
+                    distance_profile_m[interpolated_columns],
                     linestyle="none",
                     marker="x",
                     markersize=6,

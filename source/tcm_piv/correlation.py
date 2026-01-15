@@ -33,27 +33,27 @@ def calc_corr(i: int, imgs: np.ndarray, n_wins: tuple[int, int], shifts: np.ndar
     """
 
     # Split images into windows with shifts
-    wnd0, _ = split_n_shift(imgs[i], n_wins, shift=shifts[i],
+    windows0, _ = split_n_shift(imgs[i], n_wins, shift=shifts[i],
                             shift_mode='before', overlap=overlap)
-    wnd1, _ = split_n_shift(imgs[i + 1], n_wins, shift=shifts[i],
+    windows1, _ = split_n_shift(imgs[i + 1], n_wins, shift=shifts[i],
                             shift_mode='after', overlap=overlap)
 
     # Calculate correlation maps and their centres for all windows
-    corrs = {}
+    corr_maps = {}
     for j in range(n_wins[0]):
         for k in range(n_wins[1]):
 
             # Correlate two (shifted) frames
-            corr = sig.correlate(wnd1[j, k].astype(np.uint32), wnd0[j, k].astype(np.uint32),
+            corr = sig.correlate(windows1[j, k].astype(np.uint32), windows0[j, k].astype(np.uint32),
                                  method='fft', mode='same')
 
             # Calculate the centre of the correlation map
-            cntr = np.array(corr.shape) // 2
+            corr_center_yx = np.array(corr.shape) // 2
 
             # Store them in a dict
-            corrs[(i, j, k)] = (corr, cntr)
+            corr_maps[(i, j, k)] = (corr, corr_center_yx)
 
-    return corrs
+    return corr_maps
 
 
 def calc_corrs(imgs: np.ndarray, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None, overlap: float = 0, ds_fac: int = 1):
@@ -93,11 +93,11 @@ def calc_corrs(imgs: np.ndarray, n_wins: tuple[int, int] = (1, 1), shifts: np.nd
             executor.map(calc_corr_partial, range(n_corrs)), total=n_corrs, desc='Correlating windows '))
 
     # Combine results from all frames
-    corrs = {}
+    corr_maps = {}
     for frame_result in frame_results:
-        corrs.update(frame_result)
+        corr_maps.update(frame_result)
 
-    return corrs
+    return corr_maps
 
 
 def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tuple[int, int], n_corrs: int) -> dict:
@@ -119,37 +119,37 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
     # Calculate window bounds for summing: odd = symmetric, even = asymmetric
     i0 = max(0, i - (n_tosum - 1) // 2)
     i1 = min(n_corrs, i + n_tosum // 2 + 1)
-    corr_idxs = np.arange(i0, i1)
-    n_tosum = len(corr_idxs)
+    corr_indices = np.arange(i0, i1)
+    n_tosum = len(corr_indices)
 
     # For each window...
-    corrs_summed = {}
+    corr_maps_summed = {}
     for j in range(n_wins[0]):
         for k in range(n_wins[1]):
 
             # Single frame case - no alignment needed
             if n_tosum == 1:
-                corr, _ = corrs[(corr_idxs[0], j, k)]
-                corr_summed = corr
-                cntr = np.array(corr_summed.shape) // 2
+                corr, _ = corrs[(corr_indices[0], j, k)]
+                corr_sum = corr
+                corr_center_yx = np.array(corr_sum.shape) // 2
 
             # Multiple frames case - need alignment and summing
             else:
                 # Extract shifts for this specific window
                 if shifts.ndim == 2:  # 2D shifts: same for all windows
                     ref_shift = shifts[i]
-                    window_shifts = shifts[corr_idxs]
+                    window_shifts = shifts[corr_indices]
                 else:  # 4D shifts: different per window
                     ref_shift = shifts[i, j, k]
-                    window_shifts = shifts[corr_idxs, j, k]
+                    window_shifts = shifts[corr_indices, j, k]
 
                 # Calculate relative shifts for this window
-                rel_shifts = (window_shifts - ref_shift).astype(int)
+                rel_shifts_yx = (window_shifts - ref_shift).astype(int)
 
                 # Collect all correlation maps for this window to determine shapes
                 all_corrs = []
                 all_shapes = []
-                for frame_idx in corr_idxs:
+                for frame_idx in corr_indices:
                     corr, _ = corrs[(frame_idx, j, k)]
                     all_corrs.append(corr)
                     all_shapes.append(corr.shape)
@@ -159,8 +159,8 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
                              max(shape[1] for shape in all_shapes))
 
                 # Calculate the expanded size needed to fit all shifted maps
-                shift_min = np.min(rel_shifts, axis=0)
-                shift_max = np.max(rel_shifts, axis=0)
+                shift_min = np.min(rel_shifts_yx, axis=0)
+                shift_max = np.max(rel_shifts_yx, axis=0)
 
                 # Ensure we get scalar integers for shape calculations
                 shift_range_y = int(shift_max[0] - shift_min[0])
@@ -169,26 +169,26 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
                                   max_shape[1] + shift_range_x)
 
                 # Pre-allocate the summed correlation map
-                corr_summed = np.zeros(
+                corr_sum = np.zeros(
                     expanded_shape, dtype=all_corrs[0].dtype)
 
                 # Calculate new center position in expanded map (based on max shape)
-                cntr = (max_shape[0] // 2 - int(shift_min[0]),
+                corr_center_yx = (max_shape[0] // 2 - int(shift_min[0]),
                         max_shape[1] // 2 - int(shift_min[1]))
 
                 # Sum each correlation map at its shifted position
-                for corr, shift in zip(all_corrs, rel_shifts):
+                for corr, shift in zip(all_corrs, rel_shifts_yx):
                     # Calculate placement indices
                     sy, sx = shift - shift_min
                     ey, ex = sy + corr.shape[0], sx + corr.shape[1]
 
                     # Add correlation map to summed array
-                    corr_summed[sy:ey, sx:ex] += corr
+                    corr_sum[sy:ey, sx:ex] += corr
 
             # Store the summed map and its center for this window
-            corrs_summed[(i, j, k)] = (corr_summed, cntr)
+                corr_maps_summed[(i, j, k)] = (corr_sum, corr_center_yx)
 
-    return corrs_summed
+            return corr_maps_summed
 
 
 def sum_corrs(corrs: dict, n_tosum: int, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None) -> dict:

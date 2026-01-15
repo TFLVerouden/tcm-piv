@@ -53,15 +53,15 @@ def find_peaks(corr: np.ndarray, n_peaks: int = 1, min_dist: int = 5, floor: flo
                        mode='constant', constant_values=np.nan)
 
     # Calculate the intensities of the peaks
-    ints = np.full(n_peaks, np.nan)
+    intensities = np.full(n_peaks, np.nan)
     
     # Only calculate intensities for valid (non-NaN) peaks
-    valid_mask = ~np.isnan(peaks).any(axis=1)
-    if np.any(valid_mask):
-        valid_peaks = peaks[valid_mask]
-        ints[valid_mask] = corr[valid_peaks[:, 0].astype(int), valid_peaks[:, 1].astype(int)]
+    valid_peak_mask = ~np.isnan(peaks).any(axis=1)
+    if np.any(valid_peak_mask):
+        valid_peaks = peaks[valid_peak_mask]
+        intensities[valid_peak_mask] = corr[valid_peaks[:, 0].astype(int), valid_peaks[:, 1].astype(int)]
 
-    return peaks, ints
+    return peaks, intensities
 
 
 def three_point_gauss(array: np.ndarray) -> float:
@@ -89,16 +89,16 @@ def three_point_gauss(array: np.ndarray) -> float:
         return 0.0
     
     # Replace any zero values with 1 to avoid log(0) issues
-    array1 = np.where(array <= 0, 1, array)
+    array_safe = np.where(array <= 0, 1, array)
     
     # Calculate the denominator (PIV book §5.4.5)
-    den = (np.log(array1[0]) + np.log(array1[2]) - 2 * np.log(array1[1]))
+    denom = (np.log(array_safe[0]) + np.log(array_safe[2]) - 2 * np.log(array_safe[1]))
     
     # If the denominator is too small, return 0 to avoid division by zero
-    if np.abs(den) < 1e-10:
+    if np.abs(denom) < 1e-10:
         return 0.0
     else:
-        return (0.5 * (np.log(array1[0]) - np.log(array1[2])) / den)
+        return (0.5 * (np.log(array_safe[0]) - np.log(array_safe[2])) / denom)
 
 
 def subpixel(corr: np.ndarray, peak: np.ndarray) -> np.ndarray:
@@ -115,11 +115,11 @@ def subpixel(corr: np.ndarray, peak: np.ndarray) -> np.ndarray:
     """
 
     # Apply three-point Gaussian fit to peak coordinates in two directions
-    y_corr = three_point_gauss(corr[peak[0] - 1:peak[0] + 2, peak[1]])
-    x_corr = three_point_gauss(corr[peak[0], peak[1] - 1:peak[1] + 2])
+    dy_subpx = three_point_gauss(corr[peak[0] - 1:peak[0] + 2, peak[1]])
+    dx_subpx = three_point_gauss(corr[peak[0], peak[1] - 1:peak[1] + 2])
 
     # Add subpixel correction to the peak coordinates
-    return peak.astype(np.float64) + np.array([y_corr, x_corr])
+    return peak.astype(np.float64) + np.array([dy_subpx, dx_subpx])
 
 
 def find_disp(i: int, corrs: dict, shifts: np.ndarray, n_wins: tuple[int, int], n_peaks: int, ds_fac: int, subpx: bool = False, **find_peaks_kwargs) -> tuple[int, np.ndarray, np.ndarray]:
@@ -141,8 +141,8 @@ def find_disp(i: int, corrs: dict, shifts: np.ndarray, n_wins: tuple[int, int], 
     """
     
     # Initialize output arrays for this frame
-    frame_disps = np.full((n_wins[0], n_wins[1], n_peaks, 2), np.nan)
-    frame_ints = np.full((n_wins[0], n_wins[1], n_peaks), np.nan)
+    frame_displacements = np.full((n_wins[0], n_wins[1], n_peaks, 2), np.nan)
+    frame_intensities = np.full((n_wins[0], n_wins[1], n_peaks), np.nan)
     
     for j in range(n_wins[0]):
         for k in range(n_wins[1]):
@@ -158,7 +158,7 @@ def find_disp(i: int, corrs: dict, shifts: np.ndarray, n_wins: tuple[int, int], 
             corr_map, map_center = corrs[(i, j, k)]
             
             # Find peaks in the correlation map
-            peaks, peak_ints = find_peaks(corr_map, n_peaks=n_peaks, 
+            peaks, peak_intensities = find_peaks(corr_map, n_peaks=n_peaks, 
                                                **find_peaks_kwargs)
             
             # Apply subpixel correction if requested
@@ -172,13 +172,14 @@ def find_disp(i: int, corrs: dict, shifts: np.ndarray, n_wins: tuple[int, int], 
                             peaks[p] = subpixel(corr_map, peaks[p].astype(int))
             
             # Store intensities
-            frame_ints[j, k, :] = peak_ints
+            frame_intensities[j, k, :] = peak_intensities
             
             # Calculate displacements for all peaks
-            frame_disps[j, k, :, :] = (ref_shift + 
-                                          (peaks - map_center) * ds_fac)
-    
-    return i, frame_disps, frame_ints
+            frame_displacements[j, k, :, :] = (
+                ref_shift + (peaks - map_center) * ds_fac
+            )
+
+    return i, frame_displacements, frame_intensities
 
 
 def find_disps(corrs: dict, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None, n_peaks: int = 1, ds_fac: int = 1, subpx: bool = False, verbose: bool = True, **find_peaks_kwargs) -> tuple[np.ndarray, np.ndarray]:
@@ -209,8 +210,8 @@ def find_disps(corrs: dict, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray
         shifts = np.zeros((n_corrs, 2))
 
     # Initialize output arrays
-    disps = np.full((n_corrs, n_wins[0], n_wins[1], n_peaks, 2), np.nan)
-    ints = np.full((n_corrs, n_wins[0], n_wins[1], n_peaks), np.nan)
+    displacements = np.full((n_corrs, n_wins[0], n_wins[1], n_peaks, 2), np.nan)
+    intensities = np.full((n_corrs, n_wins[0], n_wins[1], n_peaks), np.nan)
     
     # Prepare arguments for multithreading
     find_disp_partial = partial(find_disp, corrs=corrs, shifts=shifts, n_wins=n_wins, n_peaks=n_peaks, ds_fac=ds_fac, subpx=subpx, **find_peaks_kwargs)
@@ -224,11 +225,11 @@ def find_disps(corrs: dict, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray
     
     # Combine results from all frames
     for frame_idx, frame_disps, frame_ints in frame_results:
-        disps[frame_idx] = frame_disps
-        ints[frame_idx] = frame_ints
+        displacements[frame_idx] = frame_disps
+        intensities[frame_idx] = frame_ints
     
     # If verbose, print how many displacements were not found
     if verbose:
-        n_nan_disps = np.sum(np.all(np.isnan(disps), axis=(-2, -1)))
+        n_nan_disps = np.sum(np.all(np.isnan(displacements), axis=(-2, -1)))
         print(f"Finding peaks: {n_nan_disps}/{n_corrs * n_wins[0] * n_wins[1]} windows did not yield any displacements.")
-    return disps, ints
+    return displacements, intensities

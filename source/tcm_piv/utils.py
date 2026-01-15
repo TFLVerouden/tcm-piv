@@ -130,15 +130,15 @@ def vel2flow(
     else:
         raise ValueError("flow_direction must be 'x' or 'y'")
 
-    v = vel[..., component]
+    vel_component = vel[..., component]
     # Average over windows.
-    v_mean = np.nanmean(v, axis=(1, 2))
+    v_mean = np.nanmean(vel_component, axis=(1, 2))
 
     # Keep behavior predictable: if any window is NaN for a frame,
     # mark that frame's flow as NaN.
-    invalid = np.any(np.isnan(v), axis=(1, 2))
+    frame_has_nan = np.any(np.isnan(vel_component), axis=(1, 2))
     v_mean = v_mean.astype(float, copy=False)
-    v_mean[invalid] = np.nan
+    v_mean[frame_has_nan] = np.nan
 
     flow_rate = v_mean * float(d) * cross_stream_width_m  # m^3/s
 

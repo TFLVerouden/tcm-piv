@@ -41,13 +41,13 @@ def downsample(imgs: np.ndarray, factor: int) -> np.ndarray:
          """
 
     # Get image stack dimensions, check divisibility
-    n_img, h, w = imgs.shape
-    assert h % factor == 0 and w % factor == 0, \
+    n_images, height, width = imgs.shape
+    assert height % factor == 0 and width % factor == 0, \
         "Image dimensions must be divisible by block_size"
 
     # Reshape the image into blocks and sum over the blocks
-    return imgs.reshape(n_img, h // factor, factor,
-                        w // factor, factor).sum(axis=(2, 4))
+    return imgs.reshape(n_images, height // factor, factor,
+                        width // factor, factor).sum(axis=(2, 4))
 
 
 def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
@@ -148,10 +148,10 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
     split_img_w = min(int(img_w // n_x * (1 + overlap)), img_w)
 
     # Get the top-left corner of each window to create grid of window positions
-    pos_y_idxs = np.linspace(0, img_h - split_img_h, num=n_y, dtype=int)
-    pos_x_idxs = np.linspace(0, img_w - split_img_w, num=n_x, dtype=int)
+    window_y0_indices = np.linspace(0, img_h - split_img_h, num=n_y, dtype=int)
+    window_x0_indices = np.linspace(0, img_w - split_img_w, num=n_x, dtype=int)
     pos_grid = np.stack(np.meshgrid(
-        pos_y_idxs, pos_x_idxs, indexing="ij"), axis=-1)
+        window_y0_indices, window_x0_indices, indexing="ij"), axis=-1)
 
     # Compute physical centres of windows in image coordinates (for plotting/visualization)
     win_pos = np.stack((pos_grid[:, :, 0] + split_img_h / 2,
@@ -170,9 +170,9 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
     win_w = split_img_w - np.max(np.abs(shift_array[:, :, 1]))
 
     # For each window...
-    wins = np.zeros((n_y, n_x, win_h, win_w), dtype=img.dtype)
-    for i, y in enumerate(pos_y_idxs):
-        for j, x in enumerate(pos_x_idxs):
+    windows = np.zeros((n_y, n_x, win_h, win_w), dtype=img.dtype)
+    for i, y in enumerate(window_y0_indices):
+        for j, x in enumerate(window_x0_indices):
 
             # Get shift for this specific window
             dy, dx = shift_array[i, j]
@@ -229,11 +229,11 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
 
             # Apply padding if needed
             if pad_y_needed > 0 or pad_x_needed > 0:
-                wins[i, j] = np.pad(win_crop, ((pad_y_top, pad_y_bottom),
+                windows[i, j] = np.pad(win_crop, ((pad_y_top, pad_y_bottom),
                                                (pad_x_left, pad_x_right)),
                                     mode='constant', constant_values=0)
             else:
-                wins[i, j] = win_crop
+                windows[i, j] = win_crop
 
             if plot:
                 color = ['orange', 'blue'][(i + j) % 2]
@@ -253,4 +253,4 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
         ax.set(
             title=f"{n_y}x{n_x} windows {shift_mode} shift ({100*overlap:.0f}% ov.)", xlabel='x', ylabel='y')
 
-    return wins, win_pos
+    return windows, win_pos
