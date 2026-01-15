@@ -668,6 +668,7 @@ def _maybe_generate_background(
 
     print("Loading images to compute background...")
     imgs = load_images(image_paths, show_progress=True)
+    print("Generating background image...")
     background = generate_background(imgs)
 
     cropped_bg = crop(background, crop_roi)

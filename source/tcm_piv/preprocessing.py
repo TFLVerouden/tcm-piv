@@ -5,26 +5,92 @@ This module contains functions for preparing images for PIV analysis,
 including downsampling and splitting images into interrogation windows.
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 
-def generate_background(imgs: np.ndarray, method: str = 'median') -> np.ndarray:
+def generate_background(
+    imgs: np.ndarray,
+    method: str = "median",
+    *,
+    n_jobs: int | None = None,
+    show_progress: bool = True,
+    chunk_rows: int = 128,
+) -> np.ndarray:
     """Generate a background image from a stack of images.
+
+    This is implemented as a parallel reduction over row-chunks to provide a
+    responsive tqdm progress bar (similar to ``tcm_utils.io_utils.load_images``).
 
     Args:
         imgs (np.ndarray): 3D array of images (image_index, y, x).
         method (str): Method to compute background ('median' or 'mean').
+        n_jobs (int | None): Max workers for ``ThreadPoolExecutor``.
+        show_progress (bool): If True, wrap chunk processing in a tqdm bar.
+        chunk_rows (int): Number of rows per chunk.
 
     Returns:
-        np.ndarray: 2D background image (y, x).
+        np.ndarray: 2D background image (y, x) with dtype matching ``imgs``.
     """
-    if method == 'median':
-        background = np.median(imgs, axis=0)
-    elif method == 'mean':
-        background = np.mean(imgs, axis=0)
-    else:
+
+    if imgs.ndim != 3:
+        raise ValueError("imgs must be a 3D array (image_index, y, x)")
+
+    method_norm = method.strip().lower()
+    if method_norm not in {"median", "mean"}:
         raise ValueError("Method must be 'median' or 'mean'.")
+
+    n_images, height, width = imgs.shape
+    if n_images < 1:
+        raise ValueError("imgs must contain at least one image")
+
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be >= 1")
+
+    max_workers = n_jobs or (os.cpu_count() or 4)
+
+    # Pre-allocate output in float for mean/median, then cast back.
+    background = np.empty((height, width), dtype=np.float64)
+
+    # Build row chunks to process independently.
+    row_slices: list[tuple[int, int]] = []
+    for y0 in range(0, height, chunk_rows):
+        y1 = min(height, y0 + chunk_rows)
+        row_slices.append((y0, y1))
+
+    def _compute_chunk(y0: int, y1: int) -> tuple[int, np.ndarray]:
+        slab = imgs[:, y0:y1, :]
+        if method_norm == "median":
+            out = np.median(slab, axis=0)
+        else:
+            out = np.mean(slab, axis=0)
+        return y0, out
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_compute_chunk, y0, y1)
+                   for (y0, y1) in row_slices]
+
+        iterator = as_completed(futures)
+        if show_progress:
+            iterator = tqdm(
+                iterator,
+                total=len(futures),
+                desc="Generating background",
+                leave=False,
+                miniters=1,
+                mininterval=0.1,
+                dynamic_ncols=True,
+            )
+
+        for fut in iterator:
+            y0, out = fut.result()
+            y1 = y0 + out.shape[0]
+            background[y0:y1, :] = out
+
     return background.astype(imgs.dtype)
 
 
