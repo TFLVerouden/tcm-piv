@@ -17,14 +17,14 @@ from tqdm import tqdm
 from .preprocessing import split_n_shift, downsample
 
 
-def calc_corr(i: int, imgs: np.ndarray, n_wins: tuple[int, int], shifts: np.ndarray, overlap: float) -> dict:
+def calc_corr(i: int, imgs: np.ndarray, n_windows: tuple[int, int], shifts: np.ndarray, overlap: float) -> dict:
     """
     Calculate correlation maps for a single set of frames.
 
     Args:
         i (int): Frame index
         imgs (np.ndarray): 3D array of images (frame, y, x)
-        n_wins (tuple[int, int]): Number of windows (n_y, n_x)
+        n_windows (tuple[int, int]): Number of windows (n_y, n_x)
         shifts (np.ndarray): Array of shifts per frame (frame, y_shift, x_shift)
         overlap (float): Fractional overlap between windows (0 = no overlap)
 
@@ -33,15 +33,15 @@ def calc_corr(i: int, imgs: np.ndarray, n_wins: tuple[int, int], shifts: np.ndar
     """
 
     # Split images into windows with shifts
-    windows0, _ = split_n_shift(imgs[i], n_wins, shift=shifts[i],
-                            shift_mode='before', overlap=overlap)
-    windows1, _ = split_n_shift(imgs[i + 1], n_wins, shift=shifts[i],
-                            shift_mode='after', overlap=overlap)
+    windows0, _ = split_n_shift(imgs[i], n_windows, shift=shifts[i],
+                                shift_mode='before', overlap=overlap)
+    windows1, _ = split_n_shift(imgs[i + 1], n_windows, shift=shifts[i],
+                                shift_mode='after', overlap=overlap)
 
     # Calculate correlation maps and their centres for all windows
     corr_maps = {}
-    for j in range(n_wins[0]):
-        for k in range(n_wins[1]):
+    for j in range(n_windows[0]):
+        for k in range(n_windows[1]):
 
             # Correlate two (shifted) frames
             corr = sig.correlate(windows1[j, k].astype(np.uint32), windows0[j, k].astype(np.uint32),
@@ -56,17 +56,17 @@ def calc_corr(i: int, imgs: np.ndarray, n_wins: tuple[int, int], shifts: np.ndar
     return corr_maps
 
 
-def calc_corrs(imgs: np.ndarray, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None, overlap: float = 0, ds_fac: int = 1):
+def calc_corrs(imgs: np.ndarray, n_windows: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None, overlap: float = 0, ds_factor: int = 1):
     """
     Calculate correlation maps for all frames and windows.
 
     Args:
         imgs (np.ndarray): 3D array of images (frame, y, x)
-        n_wins (tuple[int, int]): Nr of windows (n_y, n_x)
+        n_windows (tuple[int, int]): Nr of windows (n_y, n_x)
         shifts (np.ndarray | None): 2D array of shifts per window
             (frame, y_shift, x_shift). If None, shift zero is used.
         overlap (float): Fractional overlap between windows (0 = no overlap)
-        ds_fac (int): Downsampling factor (1 = no downsampling)
+        ds_factor (int): Downsampling factor (1 = no downsampling)
 
     Returns:
         dict: Correlation maps as {(frame, win_y, win_x):
@@ -75,8 +75,8 @@ def calc_corrs(imgs: np.ndarray, n_wins: tuple[int, int] = (1, 1), shifts: np.nd
     n_corrs = len(imgs) - 1
 
     # Apply downsampling if needed
-    if ds_fac > 1:
-        imgs = downsample(imgs, ds_fac)
+    if ds_factor > 1:
+        imgs = downsample(imgs, ds_factor)
 
     # Handle shifts - default to zero if not provided
     if shifts is None:
@@ -84,7 +84,7 @@ def calc_corrs(imgs: np.ndarray, n_wins: tuple[int, int] = (1, 1), shifts: np.nd
 
     # Prepare arguments for multithreading
     calc_corr_partial = partial(
-        calc_corr, imgs=imgs, n_wins=n_wins, shifts=shifts, overlap=overlap)
+        calc_corr, imgs=imgs, n_windows=n_windows, shifts=shifts, overlap=overlap)
 
     # Execute calc_corr in parallel for each frame
     n_jobs = os.cpu_count() or 4
@@ -100,7 +100,7 @@ def calc_corrs(imgs: np.ndarray, n_wins: tuple[int, int] = (1, 1), shifts: np.nd
     return corr_maps
 
 
-def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tuple[int, int], n_corrs: int) -> dict:
+def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_corrs_to_sum: int, n_windows: tuple[int, int], n_corrs: int) -> dict:
     """
     Sum correlation maps for a single set of frames.
 
@@ -108,8 +108,8 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
         i (int): Frame index
         corrs (dict): Correlation maps from calc_corrs
         shifts (np.ndarray): Array of shifts - can be 2D (frame, 2) or 4D (frame, win_y, win_x, 2)
-        n_tosum (int): Number of correlation maps to sum
-        n_wins (tuple[int, int]): Number of windows (n_y, n_x)
+        n_corrs_to_sum (int): Number of correlation maps to sum
+        n_windows (tuple[int, int]): Number of windows (n_y, n_x)
         n_corrs (int): Total number of correlation frames
 
     Returns:
@@ -117,18 +117,18 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
     """
 
     # Calculate window bounds for summing: odd = symmetric, even = asymmetric
-    i0 = max(0, i - (n_tosum - 1) // 2)
-    i1 = min(n_corrs, i + n_tosum // 2 + 1)
+    i0 = max(0, i - (n_corrs_to_sum - 1) // 2)
+    i1 = min(n_corrs, i + n_corrs_to_sum // 2 + 1)
     corr_indices = np.arange(i0, i1)
-    n_tosum = len(corr_indices)
+    n_corrs_to_sum = len(corr_indices)
 
     # For each window...
     corr_maps_summed = {}
-    for j in range(n_wins[0]):
-        for k in range(n_wins[1]):
+    for j in range(n_windows[0]):
+        for k in range(n_windows[1]):
 
             # Single frame case - no alignment needed
-            if n_tosum == 1:
+            if n_corrs_to_sum == 1:
                 corr, _ = corrs[(corr_indices[0], j, k)]
                 corr_sum = corr
                 corr_center_yx = np.array(corr_sum.shape) // 2
@@ -174,7 +174,7 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
 
                 # Calculate new center position in expanded map (based on max shape)
                 corr_center_yx = (max_shape[0] // 2 - int(shift_min[0]),
-                        max_shape[1] // 2 - int(shift_min[1]))
+                                  max_shape[1] // 2 - int(shift_min[1]))
 
                 # Sum each correlation map at its shifted position
                 for corr, shift in zip(all_corrs, rel_shifts_yx):
@@ -186,30 +186,30 @@ def sum_corr(i: int, corrs: dict, shifts: np.ndarray, n_tosum: int, n_wins: tupl
                     corr_sum[sy:ey, sx:ex] += corr
 
             # Store the summed map and its center for this window
-                corr_maps_summed[(i, j, k)] = (corr_sum, corr_center_yx)
+            corr_maps_summed[(i, j, k)] = (corr_sum, corr_center_yx)
 
-            return corr_maps_summed
+    return corr_maps_summed
 
 
-def sum_corrs(corrs: dict, n_tosum: int, n_wins: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None) -> dict:
+def sum_corrs(corrs: dict, n_corrs_to_sum: int, n_windows: tuple[int, int] = (1, 1), shifts: np.ndarray | None = None) -> dict:
     """
     Sum correlation maps with windowing and alignment.
 
     Args:
         corrs (dict): Correlation maps from calc_corrs
             as {(frame, win_y, win_x): (correlation_map, map_center)}
-        n_tosum (int): Nr of corr. maps to sum (1 = none, even = asymmetric)
-        n_wins (tuple[int, int]): Number of windows (n_y, n_x)
+        n_corrs_to_sum (int): Nr of corr. maps to sum (1 = none, even = asymmetric)
+        n_windows (tuple[int, int]): Number of windows (n_y, n_x)
         shifts (np.ndarray | None): 2D array of shifts per window
             (frame, y_shift, x_shift). (0, 0, 0) if None
 
     Returns:
-        dict: Summed correlation maps as {(frame, win_y, win_x, k): (summed_map, new_center)}
+        dict: Summed correlation maps as {(frame, win_y, win_x): (summed_map, new_center)}
     """
 
     # Verify that n_tosum is a positive integer
-    if n_tosum < 1 or not isinstance(n_tosum, int):
-        raise ValueError("n_tosum must be a positive integer")
+    if n_corrs_to_sum < 1 or not isinstance(n_corrs_to_sum, int):
+        raise ValueError("n_corrs_to_sum must be a positive integer")
 
     # Determine number of frames from dictionary keys
     n_corrs = max(key[0] for key in corrs.keys()) + 1
@@ -220,7 +220,7 @@ def sum_corrs(corrs: dict, n_tosum: int, n_wins: tuple[int, int] = (1, 1), shift
 
     # Prepare arguments for multithreading
     sum_corr_partial = partial(
-        sum_corr, corrs=corrs, shifts=shifts, n_tosum=n_tosum, n_wins=n_wins, n_corrs=n_corrs)
+        sum_corr, corrs=corrs, shifts=shifts, n_corrs_to_sum=n_corrs_to_sum, n_windows=n_windows, n_corrs=n_corrs)
 
     n_jobs = os.cpu_count() or 4
 

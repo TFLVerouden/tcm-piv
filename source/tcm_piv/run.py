@@ -197,12 +197,12 @@ def run(
         plot_windows = bool(_per_pass(cfg.WINDOW_PLOT_ENABLED, pass_idx0))
         # vector overlays removed for now
 
-        n_wins = tuple(_per_pass(cfg.NR_WINDOWS, pass_idx0))
-        n_win_y, n_win_x = int(n_wins[0]), int(n_wins[1])
+        n_windows = tuple(_per_pass(cfg.NR_WINDOWS, pass_idx0))
+        n_win_y, n_win_x = int(n_windows[0]), int(n_windows[1])
         n_img_pairs = len(time_s)
 
         print(
-            f"\nPASS {pass_idx1:02d}/{int(cfg.NR_PASSES):02d}: n_wins=({n_win_y},{n_win_x})"
+            f"\nPASS {pass_idx1:02d}/{int(cfg.NR_PASSES):02d}: n_windows=({n_win_y},{n_win_x})"
         )
 
         if pass_idx1 < start_pass_1b:
@@ -303,10 +303,12 @@ def run(
                 shifts = None
                 if pass_idx0 > 0 and prev_disp_final is not None:
                     shifts = piv.disp2shift(
-                        (n_win_y, n_win_x), prev_disp_final)
+                        n_windows=(n_win_y, n_win_x),
+                        displacements=prev_disp_final,
+                    )
                 window_layouts.append({
                     "pass": pass_idx1,
-                    "n_wins": (n_win_y, n_win_x),
+                    "n_windows": (n_win_y, n_win_x),
                     "overlap": overlap,
                     "shifts": shifts,
                 })
@@ -376,16 +378,19 @@ def run(
                     raise RuntimeError(
                         f"Pass {pass_idx1} needs previous displacement to compute shifts")
                 print("Computing window shifts from previous pass...")
-                shifts = piv.disp2shift((n_win_y, n_win_x), prev_disp_final)
+                shifts = piv.disp2shift(
+                    n_windows=(n_win_y, n_win_x),
+                    displacements=prev_disp_final,
+                )
 
             # 1) Calculate correlations per pair/window.
             print("Step 1: calculating correlation maps...")
             corrs = piv.calc_corrs(
                 imgs,
-                n_wins=(n_win_y, n_win_x),
+                n_windows=(n_win_y, n_win_x),
                 shifts=shifts,
                 overlap=overlap,
-                ds_fac=ds_factor,
+                ds_factor=ds_factor,
             )
 
             # 2) Optionally sum correlations over a time window.
@@ -395,7 +400,7 @@ def run(
             corrs_sum = piv.sum_corrs(
                 corrs,
                 n_corrs_to_sum,
-                n_wins=(n_win_y, n_win_x),
+                n_windows=(n_win_y, n_win_x),
                 shifts=shifts,
             )
 
@@ -418,12 +423,12 @@ def run(
             print(f"Step 3: finding peaks (nr_peaks={n_peaks})...")
             disp_peaks_unf, peak_int_unf = piv.find_disps(
                 corrs_sum,
-                n_wins=(n_win_y, n_win_x),
+                n_windows=(n_win_y, n_win_x),
                 shifts=shifts,
                 n_peaks=n_peaks,
-                ds_fac=ds_factor,
+                ds_factor=ds_factor,
                 min_dist=min_peak_dist_px,
-                subpx=pass_idx0 == cfg.NR_PASSES - 1,
+                do_subpixel=pass_idx0 == cfg.NR_PASSES - 1,
             )
 
             # Window positions (for plotting/interpretation) are derived from
@@ -524,13 +529,13 @@ def run(
 
         if nb_replace == "closest":
             print(
-                f"  neighbour_filter: mode={nb_mode} thr_unit={nb_thr_unit} replace={nb_replace}"
+                f"  neighbour_filter: mode={nb_mode} threshold_unit={nb_thr_unit} replace={nb_replace}"
             )
             disp_nb_5d = piv.filter_neighbours(
                 disp_global_5d,
-                thr=nb_thr,  # type: ignore[arg-type]
-                thr_unit=nb_thr_unit,
-                n_nbs=nb_size_tyx,
+                threshold=nb_thr,  # type: ignore[arg-type]
+                threshold_unit=nb_thr_unit,
+                neighbourhood_size=nb_size_tyx,
                 mode=nb_mode,
                 replace=nb_replace,
                 verbose=True,
@@ -546,15 +551,16 @@ def run(
             disp_final = disp_nb
         else:
             print(
-                f"  neighbour_filter: mode={nb_mode} thr_unit={nb_thr_unit} replace={nb_replace}"
+                f"  neighbour_filter: mode={nb_mode} threshold_unit={nb_thr_unit} replace={nb_replace}"
             )
             disp_global = piv.strip_peaks(
                 disp_global_5d, axis=-2, mode="reduce", verbose=True
             )
             disp_nb = piv.filter_neighbours(
                 disp_global,
-                thr=nb_thr,  # type: ignore[arg-type]
-                n_nbs=nb_size_tyx,
+                threshold=nb_thr,  # type: ignore[arg-type]
+                threshold_unit=nb_thr_unit,
+                neighbourhood_size=nb_size_tyx,
                 mode=nb_mode,
                 replace=nb_replace,
                 verbose=True,
@@ -568,7 +574,11 @@ def run(
                     f"  temporal_smoothing: enabled (lambda={time_smooth_lam})"
                 )
                 disp_final = piv.smooth(
-                    time_s, disp_final, lam=time_smooth_lam, type=int)
+                    time_s,
+                    disp_final,
+                    smoothing_lambda=time_smooth_lam,
+                    dtype=int,
+                )
 
         # Final pass: patch remaining NaN holes by interpolation
         if (
@@ -578,15 +588,15 @@ def run(
             and np.isnan(disp_final).any()
         ):
             print(
-                f"  interpolation: patching NaN holes (n_nbs={interp_nb_size_tyx})"
+                f"  interpolation: patching NaN holes (neighbourhood_size={interp_nb_size_tyx})"
             )
             disp_pre_interp = disp_final
             nan_mask = np.any(np.isnan(disp_pre_interp), axis=-1)
 
             disp_patched = piv.filter_neighbours(
                 disp_pre_interp,
-                thr=None,
-                n_nbs=interp_nb_size_tyx,
+                threshold=None,
+                neighbourhood_size=interp_nb_size_tyx,
                 mode="xy",
                 replace="interp",
                 verbose=True,
@@ -599,7 +609,7 @@ def run(
         if plot_windows:
             window_layouts.append({
                 "pass": pass_idx1,
-                "n_wins": (n_win_y, n_win_x),
+                "n_windows": (n_win_y, n_win_x),
                 "overlap": overlap,
                 "shifts": shifts,
             })
@@ -726,7 +736,7 @@ def run(
             for layout in window_layouts:
                 viz.plot_window_layout(
                     image_for_plots,
-                    layout["n_wins"],
+                    layout["n_windows"],
                     overlap=float(layout.get("overlap", 0.0)),
                     shifts=layout.get("shifts"),
                     shift_mode="before",
@@ -740,14 +750,15 @@ def run(
             final_pass_i = int(cfg.NR_PASSES) - 1
             n_wins_final = tuple(_per_pass(cfg.NR_WINDOWS, final_pass_i))
             overlap_final = float(_per_pass(cfg.WINDOW_OVERLAP, final_pass_i))
-            ds_fac_final = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, final_pass_i))
+            ds_factor_final = int(
+                _per_pass(cfg.DOWNSAMPLE_FACTOR, final_pass_i))
             viz.export_velocity_profiles_pdf(
                 vel_final=vel_final,
                 interpolated_mask=interp_filled_mask,
                 image=image_for_plots,
-                n_wins=(int(n_wins_final[0]), int(n_wins_final[1])),
+                n_windows=(int(n_wins_final[0]), int(n_wins_final[1])),
                 overlap=overlap_final,
-                ds_fac=ds_fac_final,
+                ds_factor=ds_factor_final,
                 scale_m_per_px=float(cfg.SCALE_M_PER_PX),
                 flow_direction=str(cfg.FLOW_DIRECTION),
                 time_s=time_s[: len(flow_ls)],

@@ -101,14 +101,14 @@ def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
     return imgs[:, y_start:y_end, x_start:x_end] if not was_2d else imgs[0, y_start:y_end, x_start:x_end]
 
 
-def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, shift: tuple[int, int] | np.ndarray = (0, 0), shift_mode: str = 'before', plot: bool = False) -> tuple[np.ndarray, np.ndarray]:
+def split_n_shift(img: np.ndarray, n_windows: tuple[int, int], overlap: float = 0, shift: tuple[int, int] | np.ndarray = (0, 0), shift_mode: str = 'before', plot: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """
     Split a 2D image array (y, x) into (overlapping) windows,
     with automatic window size adjustments for shifted images.
 
     Args:
         img (np.ndarray): 2D array of image values (y, x).
-        n_wins (tuple[int, int]): Number of windows in (y, x) direction.
+        n_windows (tuple[int, int]): Number of windows in (y, x) direction.
         overlap (float): Fractional overlap between windows (0 = no overlap).
         shift (tuple[int, int] | np.ndarray): (dy, dx) shift in pixels - can be (0, 0) for uniform shift
                                               or 3D array (n_y, n_x, 2) for non-uniform shift per window.
@@ -122,7 +122,7 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
     """
     # Get dimensions
     img_h, img_w = img.shape
-    n_y, n_x = n_wins
+    n_y, n_x = n_windows
 
     # Handle both uniform and non-uniform shifts
     shift_array = np.asarray(shift)
@@ -230,8 +230,8 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
             # Apply padding if needed
             if pad_y_needed > 0 or pad_x_needed > 0:
                 windows[i, j] = np.pad(win_crop, ((pad_y_top, pad_y_bottom),
-                                               (pad_x_left, pad_x_right)),
-                                    mode='constant', constant_values=0)
+                                                  (pad_x_left, pad_x_right)),
+                                       mode='constant', constant_values=0)
             else:
                 windows[i, j] = win_crop
 

@@ -18,7 +18,7 @@ __email__ = "t.f.l.verouden@utwente.nl"
 
 from .preprocessing import downsample, split_n_shift
 from .correlation import calc_corr, calc_corrs, sum_corr, sum_corrs
-from .displacement import find_peaks, three_point_gauss, subpixel, find_disp, find_disps
+from .displacement import find_peaks, three_point_gauss, subpixel_correction, find_disp, find_disps
 from .postprocessing import (
     filter_outliers, filter_neighbours, first_valid, strip_peaks, smooth)
 from .utils import cart2polar, get_time, disp2shift, vel2flow
@@ -31,7 +31,7 @@ __all__ = [
     'calc_corr', 'calc_corrs', 'sum_corr', 'sum_corrs',
 
     # Displacement functions
-    'find_peaks', 'three_point_gauss', 'subpixel', 'find_disp', 'find_disps',
+    'find_peaks', 'three_point_gauss', 'subpixel_correction', 'find_disp', 'find_disps',
 
     # Postprocessing functions
     'filter_outliers', 'filter_neighbours',

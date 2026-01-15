@@ -150,7 +150,7 @@ def plot_filter_ranges(
 
 def plot_window_layout(
     image: np.ndarray,
-    n_wins: tuple[int, int],
+    n_windows: tuple[int, int],
     *,
     overlap: float = 0.0,
     shifts: np.ndarray | None = None,
@@ -178,7 +178,7 @@ def plot_window_layout(
     # `split_n_shift(plot=True)` creates its own figure/axes.
     split_n_shift(
         np.asarray(image),
-        n_wins,
+        n_windows,
         overlap=float(overlap),
         shift=shift_arg,
         shift_mode=shift_mode,
@@ -272,9 +272,9 @@ def export_velocity_profiles_pdf(
     vel_final: np.ndarray,
     interpolated_mask: np.ndarray | None = None,
     image: np.ndarray,
-    n_wins: tuple[int, int],
+    n_windows: tuple[int, int],
     overlap: float,
-    ds_fac: int,
+    ds_factor: int,
     scale_m_per_px: float,
     flow_direction: str,
     time_s: np.ndarray,
@@ -303,10 +303,10 @@ def export_velocity_profiles_pdf(
                 "interpolated_mask must have shape (n_pairs, n_y, n_x) matching vel_final"
             )
 
-    if (n_y, n_x) != (int(n_wins[0]), int(n_wins[1])):
+    if (n_y, n_x) != (int(n_windows[0]), int(n_windows[1])):
         # Keep it strict so we don't silently plot the wrong geometry.
         raise ValueError(
-            f"n_wins {n_wins} does not match vel_final window grid {(n_y, n_x)}"
+            f"n_windows {n_windows} does not match vel_final window grid {(n_y, n_x)}"
         )
 
     flow_dir = str(flow_direction).strip().lower()
@@ -328,7 +328,7 @@ def export_velocity_profiles_pdf(
     if image_arr.ndim != 2:
         raise ValueError("image must be a 2D array")
 
-    downsample_factor = int(ds_fac)
+    downsample_factor = int(ds_factor)
     if downsample_factor < 1:
         raise ValueError("ds_fac must be >= 1")
 
@@ -336,7 +336,8 @@ def export_velocity_profiles_pdf(
         # `downsample` expects a stack; this matches `correlation.calc_corrs`.
         from tcm_piv.preprocessing import downsample
 
-        image_downsampled = downsample(image_arr[np.newaxis, ...], downsample_factor)[0]
+        image_downsampled = downsample(
+            image_arr[np.newaxis, ...], downsample_factor)[0]
     else:
         image_downsampled = image_arr
 
