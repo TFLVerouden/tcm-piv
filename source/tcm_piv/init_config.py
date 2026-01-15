@@ -1,307 +1,313 @@
 """Configuration loading for tcm-piv.
 
-This module provides :func:`read_file` which loads a TOML configuration,
-applies packaged defaults, normalizes pass-dependent parameters, and
-exposes the resulting settings as module-level variables."""
+This module provides :func:`load_config`, which:
+- loads a user TOML config,
+- deep-merges it over packaged defaults,
+- normalizes types and broadcasts per-pass parameters,
+- resolves/ensures required input files (camera + calibration),
+- and returns a single :class:`Config` object.
+
+The end-to-end pipeline in :mod:`tcm_piv.run` is the primary consumer.
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
-import shutil
-import tomllib
 from copy import deepcopy
 from pathlib import Path
+import shutil
+import tomllib
 from typing import Any, Callable
 
 import tifffile
 from natsort import natsorted
+
+from tcm_piv.preprocessing import crop, generate_background
 from tcm_utils.camera_calibration import ensure_calibration
 from tcm_utils.file_dialogs import ask_open_file
 from tcm_utils.io_utils import ensure_path, load_images, load_metadata, prompt_yes_no
 from tcm_utils.read_cihx import ensure_cihx_processed
 from tcm_utils.time_utils import timestamp_str
-from tcm_piv.preprocessing import crop, generate_background
 
 
-# These variables are populated by read_file(). Defaults live in default_config.toml.
-#
-# MAINTENANCE GUIDE (adding/changing config variables)
-# --------------------------------------------------
-# The config system is intentionally “TOML-driven”:
-# - `default_config.toml` is the single source of truth for defaults.
-# - `read_file()` loads user TOML, deep-merges it over the defaults, and then
-#   normalizes/types values before exposing them as module-level variables.
-# - The Python code should NOT hard-code fallback defaults in `.get(..., default)`.
-#
-# When you ADD a new config variable:
-# 1) Add it to `default_config.toml` under the right table.
-#    - Every key that `read_file()` indexes (e.g. `preprocessing["crop_roi"]`)
-#      must exist in defaults.
-#    - Keep tables only 1 level deep (this project’s TOML writer `_toml_dump()`
-#      does not support nested tables beyond `[section] key = value`).
-#    - TOML has no `null`. For “optional path” style values, use the convention
-#      of an empty string `""` meaning “not provided”.
-#
-# 2) Add/update the example config (`config.toml`) so users see the new option.
-#    - Put a realistic example value and short comment.
-#
-# 3) Add a module-level type annotation here.
-#    - This is for IDE/type-checking and for documenting what `read_file()` sets.
-#
-# 4) In `read_file()`, read the value from the merged config and normalize it.
-#    Typical patterns:
-#    - Scalar (single value): `value = float(table["my_key"])`
-#    - Per-pass: use `_normalize_per_pass(...)`.
-#      * If it can be either scalar or per-pass list, `_normalize_per_pass` will
-#        broadcast a scalar or `[x]` to length `nr_passes`.
-#      * For “tuple-like” arrays (e.g. `[w, h]`), use `_as_int_tuple/_as_float_tuple`
-#        and pass `tuple_len=...` so `[w, h]` is treated as one element, not as
-#        per-pass list.
-#
-# 5) If runtime code can “fill in” this value (e.g. prompting for paths,
-#    generating a background, running ensure_*), decide whether it should be
-#    persisted back to the user config.
-#    - If yes: add it to `updated_snapshot[...]` so it appears in the diff and
-#      can be saved (with backup) to the original TOML.
-#    - If no: keep it as a runtime-only variable.
-#
-# When you CHANGE a variable (rename/change type/change meaning):
-# - Update `default_config.toml`, `config.toml`, and the corresponding parsing
-#   logic in `read_file()` together.
-# - If you rename keys, consider temporarily supporting the old key by mapping
-#   it in code during a transition period (but keep defaults TOML consistent).
-#
-# After changes:
-# - Run `python -m tcm_piv.main path/to/config.toml` (or your normal entrypoint)
-#   to sanity-check parsing and the “update config with backup” flow.
-NR_PASSES: int
-
-# TODO: Add rectangle filter options?
-
-# [source]
-FRAMES_TO_USE: str | list[int]
-
-# [preprocessing]
-DOWNSAMPLE_FACTOR: list[int] | int
-BACKGROUND_DIR: str
-CROP_ROI: tuple[int, int, int, int]  # (y_start, y_end, x_start, x_end)
-
-# [correlation]
-CORRS_TO_SUM: list[int] | int
-NR_WINDOWS: list[tuple[int, int]] | tuple[int, int]
-WINDOW_OVERLAP: list[float] | float
-
-# [displacement]
-NR_PEAKS: list[int] | int
-MIN_PEAK_DISTANCE: list[int] | int
-
-# [postprocessing]
-MAX_VELOCITY: list[tuple[float, float]] | tuple[float, float]
-NEIGHBOURHOOD_SIZE: list[tuple[int, int, int]] | tuple[int, int, int]
-INTERPOLATION_NEIGHBOURHOOD: list[tuple[int, int, int] | None]
-NEIGHBOURHOOD_THRESHOLD: list[int | tuple[int, int]] | int | tuple[int, int]
-TIME_SMOOTHING_LAMBDA: list[float] | float
-FLOW_DIRECTION: str
-EXTRA_VEL_DIM_M: float
-OUTLIER_FILTER_MODE: list[str] | str
-
-
-# [visualisation]
-PLOT_MODEL: bool
-MODEL_GENDER: str
-MODEL_MASS: float
-MODEL_HEIGHT: float
-PLOT_GLOBAL_FILTERS: bool
-WINDOW_PLOT_ENABLED: list[bool]
-PLOT_CORRELATIONS: bool
-PLOT_FLOW_RATE: bool
-EXPORT_VELOCITY_PROFILES_PDF: bool
-
-
-def read_file(config_file: Path | str | None) -> None:
-    """Load TOML config, apply defaults, normalize settings, and set globals.
-
-    If no valid config file is provided, the user is prompted to select one.
-    Canceling the prompt aborts.
-    """
-
-    config_path = Path(config_file) if config_file else None
-    if not config_path or not config_path.is_file():
-        selected_path = ask_open_file(
-            key="config_file",
-            title="Select configuration file",
-            filetypes=(("TOML files", "*.toml"), ("All files", "*.*")),
-        )
-        if selected_path is None:
-            raise RuntimeError("No configuration file selected; aborting.")
-        config_path = Path(selected_path)
-
-    print(f"Reading configuration from: {config_path}.")
-    with config_path.open("rb") as fp:
-        user_cfg = tomllib.load(fp)
-
-    defaults = _read_packaged_default_config()
-    merged = _deep_merge(defaults, user_cfg)
-    original_snapshot = deepcopy(merged)
-
-    global NR_PASSES
-    NR_PASSES = int(merged["nr_passes"])
-    if NR_PASSES < 1:
-        raise ValueError("nr_passes must be >= 1")
-
-    source = merged["source"]
-    camera = merged["camera"]
-    preprocessing = merged["preprocessing"]
-    correlation = merged["correlation"]
-    displacement = merged["displacement"]
-    postprocessing = merged["postprocessing"]
-    visualisation = merged["visualisation"]
+@dataclass(frozen=True)
+class Config:
+    # Core
+    config_path: Path
+    nr_passes: int
 
     # [source]
-    global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, NR_IMAGES
-    IMAGE_DIR = str(source["image_dir"])
-    OUTPUT_DIR = str(source["output_dir"])
-    FRAMES_TO_USE = source["frames_to_use"]
-    if not (FRAMES_TO_USE == "all" or isinstance(FRAMES_TO_USE, list)):
-        raise ValueError(
-            "source.frames_to_use must be 'all' or an array of integers")
-    if isinstance(FRAMES_TO_USE, list):
-        FRAMES_TO_USE = [int(v) for v in FRAMES_TO_USE]
-
-    IMAGE_DIR = str(ensure_path(IMAGE_DIR, "image_dir",
-                    title="Select image directory"))
-    OUTPUT_DIR = str(ensure_path(
-        OUTPUT_DIR,
-        "output_dir",
-        title="Select output directory",
-        default_dir=Path(IMAGE_DIR),
-    ))
-
-    IMAGE_LIST = _get_image_list(Path(IMAGE_DIR), FRAMES_TO_USE)
-    NR_IMAGES = len(IMAGE_LIST)
-    if NR_IMAGES < 2:
-        raise RuntimeError(
-            f"Error: Found only {NR_IMAGES} images in {IMAGE_DIR}. "
-            "At least 2 images are required for PIV analysis."
-        )
-    print(f"Number of images to process: {NR_IMAGES}")
+    image_dir: Path
+    output_dir: Path
+    frames_to_use: str | list[int]
+    image_list: list[str]
+    nr_images: int
 
     # [camera]
-    global CAMERA_DIR, CALIB_DIR, CALIB_SPACING_MM, TIMESTAMP, FRAMERATE_HZ, TIMESTEP_S, SHUTTERSPEED_NS, IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX, IMAGE_WIDTH_M, IMAGE_HEIGHT_M, SCALE_M_PER_PX
-    CAMERA_DIR = str(camera["camera_dir"])
-    CALIB_DIR = str(camera["calib_dir"])
-    CALIB_SPACING_MM = float(camera["calib_spacing_mm"])
-
-    # TODO: test edge cases for "ensure*" functions
-
-    CAMERA_DIR = str(
-        ensure_cihx_processed(
-            Path(CAMERA_DIR) if CAMERA_DIR else None,
-            output_dir=Path(OUTPUT_DIR) / "camera_metadata",
-        )
-    )
-    CALIB_DIR = str(
-        ensure_calibration(
-            Path(CALIB_DIR) if CALIB_DIR else None,
-            distance_mm=CALIB_SPACING_MM,
-            output_dir=Path(OUTPUT_DIR) / "calibration",
-        )
-    )
-
-    camera_metadata = load_metadata(Path(CAMERA_DIR))
-    TIMESTAMP = str(camera_metadata.get("timestamp"))
-    camera_meta = camera_metadata.get("camera_metadata", {})
-    FRAMERATE_HZ = int(camera_meta.get("recordRate"))
-    TIMESTEP_S = 1.0 / FRAMERATE_HZ  # Formerly called "dt"
-    SHUTTERSPEED_NS = int(camera_meta.get("shutterSpeedNsec"))
-    IMAGE_WIDTH_PX = int(camera_meta.get("resolution", {}).get("width"))
-    IMAGE_HEIGHT_PX = int(camera_meta.get("resolution", {}).get("height"))
-
-    calib_metadata = load_metadata(Path(CALIB_DIR))
-    IMAGE_WIDTH_M = float(calib_metadata.get(
-        "calibration", {}).get("image_size_m", {}).get("width"))
-    IMAGE_HEIGHT_M = float(calib_metadata.get(
-        # formerly called "frame_w" (as the images are rotated...)
-        "calibration", {}).get("image_size_m", {}).get("height"))
-    SCALE_M_PER_PX = float(calib_metadata.get(
-        "calibration", {}).get("scale_m_per_px"))
+    camera_dir: Path
+    calib_dir: Path
+    calib_spacing_mm: float
+    timestamp: str
+    framerate_hz: int
+    timestep_s: float
+    shutterspeed_ns: int
+    image_width_px: int
+    image_height_px: int
+    image_width_m: float
+    image_height_m: float
+    scale_m_per_px: float
 
     # [preprocessing]
-    global DOWNSAMPLE_FACTOR, BACKGROUND_DIR, CROP_ROI
-    DOWNSAMPLE_FACTOR = _per_pass(
+    ds_factor: list[int]
+    background_dir: str
+    crop_roi: tuple[int, int, int, int]
+
+    # [correlation]
+    n_corrs_to_sum: list[int]
+    n_windows: list[tuple[int, int]]
+    window_overlap: list[float]
+
+    # [displacement]
+    n_peaks: list[int]
+    min_peak_dist_px: list[int]
+
+    # [postprocessing]
+    outlier_filter_mode: list[str]
+    max_velocity_vy_vx_m_s: list[tuple[float, float]]
+    flow_direction: str
+    extra_vel_dim_m: float
+    nb_size_tyx: list[tuple[int, int, int]]
+    interp_nb_size_tyx: list[tuple[int, int, int] | None]
+    nb_threshold: list[int | tuple[int, int]]
+    time_smooth_lam: list[float]
+
+    # [visualisation]
+    plot_model: bool
+    model_gender: str
+    model_mass: float
+    model_height: float
+    plot_global_filters: bool
+    plot_correlations: bool
+    plot_window_layout: list[bool]
+    plot_flow_rate: bool
+    export_velocity_profiles_pdf: bool
+
+
+def _optional_path(value: Any) -> Path | None:
+    s = "" if value is None else str(value).strip()
+    return Path(s) if s else None
+
+
+def _parse_source(source: dict[str, Any]) -> tuple[Path, Path, str | list[int], list[str]]:
+    frames_to_use = source["frames_to_use"]
+    if not (frames_to_use == "all" or isinstance(frames_to_use, list)):
+        raise ValueError(
+            "source.frames_to_use must be 'all' or an array of integers")
+    if isinstance(frames_to_use, list):
+        frames_to_use = [int(v) for v in frames_to_use]
+
+    image_dir = Path(ensure_path(
+        str(source["image_dir"]), "image_dir", title="Select image directory"))
+    output_dir = Path(
+        ensure_path(
+            str(source["output_dir"]),
+            "output_dir",
+            title="Select output directory",
+            default_dir=image_dir,
+        )
+    )
+
+    image_list = _get_image_list(image_dir, frames_to_use)
+    if len(image_list) < 2:
+        raise RuntimeError(
+            f"Found only {len(image_list)} images in {image_dir}. At least 2 images are required."
+        )
+
+    return image_dir, output_dir, frames_to_use, image_list
+
+
+def _parse_camera(camera: dict[str, Any], *, output_dir: Path) -> tuple[
+    float,
+    Path,
+    Path,
+    str,
+    int,
+    float,
+    int,
+    int,
+    int,
+    float,
+    float,
+    float,
+]:
+    calib_spacing_mm = float(camera["calib_spacing_mm"])
+
+    camera_dir = Path(
+        ensure_cihx_processed(
+            _optional_path(camera["camera_dir"]),
+            output_dir=output_dir / "camera_metadata",
+        )
+    )
+    calib_dir = Path(
+        ensure_calibration(
+            _optional_path(camera["calib_dir"]),
+            distance_mm=calib_spacing_mm,
+            output_dir=output_dir / "calibration",
+        )
+    )
+
+    camera_metadata = load_metadata(camera_dir)
+    timestamp = str(camera_metadata.get("timestamp"))
+    camera_meta = camera_metadata.get("camera_metadata", {})
+    framerate_hz = int(camera_meta.get("recordRate"))
+    timestep_s = 1.0 / framerate_hz
+    shutterspeed_ns = int(camera_meta.get("shutterSpeedNsec"))
+    image_width_px = int(camera_meta.get("resolution", {}).get("width"))
+    image_height_px = int(camera_meta.get("resolution", {}).get("height"))
+
+    calib_metadata = load_metadata(calib_dir)
+    image_width_m = float(
+        calib_metadata.get("calibration", {}).get(
+            "image_size_m", {}).get("width")
+    )
+    image_height_m = float(
+        calib_metadata.get("calibration", {}).get(
+            "image_size_m", {}).get("height")
+    )
+    scale_m_per_px = float(calib_metadata.get(
+        "calibration", {}).get("scale_m_per_px"))
+
+    return (
+        calib_spacing_mm,
+        camera_dir,
+        calib_dir,
+        timestamp,
+        framerate_hz,
+        timestep_s,
+        shutterspeed_ns,
+        image_width_px,
+        image_height_px,
+        image_width_m,
+        image_height_m,
+        scale_m_per_px,
+    )
+
+
+def _parse_preprocessing(
+    preprocessing: dict[str, Any],
+    *,
+    nr_passes: int,
+    image_list: list[str],
+    output_dir: Path,
+) -> tuple[list[int], tuple[int, int, int, int], str, str]:
+    ds_factor = _per_pass(
         preprocessing["ds_factor"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: int(v),
     )
+    # type: ignore[assignment]
+    crop_roi = _as_int_tuple(preprocessing["crop_roi"], length=4)
+
     bg_cfg_raw = preprocessing["background_dir"]
     bg_cfg_str = "" if bg_cfg_raw is None else str(bg_cfg_raw)
     bg_cfg_norm = bg_cfg_str.strip().lower()
-
-    # "none" / "null" is a user intent signal: do not generate, do not subtract.
-    # Keep the *config* value around so we don't suggest rewriting it.
     skip_background_generation = bg_cfg_norm in {"none", "null"}
     background_dir_for_config = bg_cfg_str if skip_background_generation else ""
 
-    BACKGROUND_DIR = bg_cfg_str
-    if skip_background_generation:
-        BACKGROUND_DIR = ""
-
-    roi_value = preprocessing["crop_roi"]
-    CROP_ROI = tuple(_as_int_tuple(roi_value, length=4)
-                     )  # type: ignore[assignment]
-
-    if not BACKGROUND_DIR and not skip_background_generation:
-        BACKGROUND_DIR = _maybe_generate_background(
-            image_paths=IMAGE_LIST,
-            output_dir=Path(OUTPUT_DIR),
-            crop_roi=CROP_ROI,
-            image_count=NR_IMAGES,
+    background_dir = "" if skip_background_generation else bg_cfg_str
+    if not background_dir and not skip_background_generation:
+        background_dir = _maybe_generate_background(
+            image_paths=image_list,
+            output_dir=output_dir,
+            crop_roi=crop_roi,
+            image_count=len(image_list),
         )
 
-    # [correlation]
-    global CORRS_TO_SUM, NR_WINDOWS, WINDOW_OVERLAP
-    CORRS_TO_SUM = _per_pass(
+    return ds_factor, crop_roi, background_dir_for_config, background_dir
+
+
+def _parse_correlation(
+    correlation: dict[str, Any], *, nr_passes: int
+) -> tuple[list[int], list[tuple[int, int]], list[float]]:
+    n_corrs_to_sum = _per_pass(
         correlation["n_corrs_to_sum"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: int(v),
     )
-    NR_WINDOWS = _per_pass(
+    n_windows = _per_pass(
         correlation["n_windows"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: _as_int_tuple(v, length=2),
         tuple_len=2,
     )
-    WINDOW_OVERLAP = _per_pass(
+    window_overlap = _per_pass(
         correlation["window_overlap"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: float(v),
     )
+    return (
+        [int(v) for v in n_corrs_to_sum],
+        [(int(v[0]), int(v[1])) for v in n_windows],
+        [float(v) for v in window_overlap],
+    )
 
-    # [displacement]
-    global NR_PEAKS, MIN_PEAK_DISTANCE
-    NR_PEAKS = _per_pass(
+
+def _parse_displacement(
+    displacement: dict[str, Any], *, nr_passes: int
+) -> tuple[list[int], list[int]]:
+    n_peaks = _per_pass(
         displacement["n_peaks"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: int(v),
     )
-    MIN_PEAK_DISTANCE = _per_pass(
+    min_peak_dist_px = _per_pass(
         displacement["min_peak_dist_px"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: int(v),
     )
+    return [int(v) for v in n_peaks], [int(v) for v in min_peak_dist_px]
 
-    # [postprocessing]
-    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, EXTRA_VEL_DIM_M, OUTLIER_FILTER_MODE, INTERPOLATION_NEIGHBOURHOOD
-    MAX_VELOCITY = _per_pass(
+
+def _parse_postprocessing(
+    postprocessing: dict[str, Any], *, nr_passes: int
+) -> tuple[
+    list[str],
+    list[tuple[float, float]],
+    str,
+    float,
+    list[tuple[int, int, int]],
+    list[tuple[int, int, int] | None],
+    list[int | tuple[int, int]],
+    list[float],
+]:
+    outlier_filter_mode = _per_pass(
+        postprocessing["outlier_filter_mode"],
+        nr_passes=nr_passes,
+        element_parser=lambda v: str(v).strip().lower(),
+    )
+    allowed_outlier_modes = {"semicircle_rect", "circle"}
+    for mode in outlier_filter_mode:
+        if mode not in allowed_outlier_modes:
+            raise ValueError(
+                "postprocessing.outlier_filter_mode must be 'semicircle_rect' or 'circle'")
+
+    max_velocity_vy_vx_m_s = _per_pass(
         postprocessing["max_velocity_vy_vx"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: _as_float_tuple(v, length=2),
         tuple_len=2,
     )
-    NEIGHBOURHOOD_SIZE = _per_pass(
+
+    flow_direction = str(postprocessing["flow_direction"]).strip().lower()
+    if flow_direction not in {"x", "y"}:
+        raise ValueError("postprocessing.flow_direction must be 'x' or 'y'")
+    extra_vel_dim_m = float(postprocessing["extra_vel_dim_m"])
+
+    nb_size_tyx = _per_pass(
         postprocessing["nb_size_tyx"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: _as_int_tuple(v, length=3),
         tuple_len=3,
     )
@@ -311,9 +317,9 @@ def read_file(config_file: Path | str | None) -> None:
             return None
         return _as_int_tuple(v, length=3)  # type: ignore[return-value]
 
-    INTERPOLATION_NEIGHBOURHOOD = _per_pass(
+    interp_nb_size_tyx = _per_pass(
         postprocessing["interp_nb_size_tyx"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=_parse_interp_nb,
         tuple_len=3,
     )
@@ -321,8 +327,7 @@ def read_file(config_file: Path | str | None) -> None:
     def _parse_threshold(v: Any) -> int | tuple[int, int]:
         if isinstance(v, list):
             if len(v) != 2:
-                raise ValueError(
-                    "neighbourhood_threshold tuple must have length 2")
+                raise ValueError("nb_threshold tuple must have length 2")
             return (int(v[0]), int(v[1]))
         return int(v)
 
@@ -333,90 +338,255 @@ def read_file(config_file: Path | str | None) -> None:
         and len(thr_value) == 2
         and all(isinstance(x, (int, float)) for x in thr_value)
     ):
-        NEIGHBOURHOOD_THRESHOLD = [_parse_threshold(
-            thr_value) for _ in range(NR_PASSES)]
+        nb_threshold = [_parse_threshold(thr_value) for _ in range(nr_passes)]
     else:
-        NEIGHBOURHOOD_THRESHOLD = _per_pass(
+        nb_threshold = _per_pass(
             thr_value,
-            nr_passes=NR_PASSES,
+            nr_passes=nr_passes,
             element_parser=_parse_threshold,
         )
 
-    TIME_SMOOTHING_LAMBDA = _per_pass(
+    time_smooth_lam = _per_pass(
         postprocessing["time_smooth_lam"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: float(v),
     )
 
-    OUTLIER_FILTER_MODE = _per_pass(
-        postprocessing["outlier_filter_mode"],
-        nr_passes=NR_PASSES,
-        element_parser=lambda v: str(v).strip().lower(),
+    return (
+        [str(m) for m in outlier_filter_mode],
+        [(float(v[0]), float(v[1])) for v in max_velocity_vy_vx_m_s],
+        flow_direction,
+        extra_vel_dim_m,
+        [(int(v[0]), int(v[1]), int(v[2])) for v in nb_size_tyx],
+        interp_nb_size_tyx,
+        nb_threshold,
+        [float(v) for v in time_smooth_lam],
     )
-    allowed_outlier_modes = {"semicircle_rect", "circle"}
-    for mode in OUTLIER_FILTER_MODE:
-        if mode not in allowed_outlier_modes:
-            raise ValueError(
-                "postprocessing.outlier_filter_mode must be 'semicircle_rect' or 'circle' (scalar or per-pass array)"
-            )
 
-    FLOW_DIRECTION = str(postprocessing["flow_direction"]).strip().lower()
-    if FLOW_DIRECTION not in {"x", "y"}:
-        raise ValueError("postprocessing.flow_direction must be 'x' or 'y'")
 
-    # formerly called "depth"
-    EXTRA_VEL_DIM_M = float(postprocessing["extra_vel_dim_m"])
-
-    # [visualisation]
-    global PLOT_MODEL, MODEL_GENDER, MODEL_MASS, MODEL_HEIGHT
-    global PLOT_GLOBAL_FILTERS, WINDOW_PLOT_ENABLED, PLOT_CORRELATIONS, PLOT_FLOW_RATE, EXPORT_VELOCITY_PROFILES_PDF
-    PLOT_MODEL = bool(visualisation["plot_model"])
-    MODEL_GENDER = str(visualisation["model_gender"])
-    MODEL_MASS = float(visualisation["model_mass"])
-    MODEL_HEIGHT = float(visualisation["model_height"])
-
-    PLOT_GLOBAL_FILTERS = bool(visualisation["plot_global_filters"])
-    PLOT_CORRELATIONS = bool(visualisation["plot_correlations"])
-    PLOT_FLOW_RATE = bool(visualisation["plot_flow_rate"])
-    EXPORT_VELOCITY_PROFILES_PDF = bool(
-        visualisation["export_velocity_profiles_pdf"]
-    )
-    WINDOW_PLOT_ENABLED = _per_pass(
+def _parse_visualisation(
+    visualisation: dict[str, Any], *, nr_passes: int
+) -> tuple[bool, str, float, float, bool, bool, list[bool], bool, bool]:
+    plot_model = bool(visualisation["plot_model"])
+    model_gender = str(visualisation["model_gender"])
+    model_mass = float(visualisation["model_mass"])
+    model_height = float(visualisation["model_height"])
+    plot_global_filters = bool(visualisation["plot_global_filters"])
+    plot_correlations = bool(visualisation["plot_correlations"])
+    plot_window_layout = _per_pass(
         visualisation["plot_window_layout"],
-        nr_passes=NR_PASSES,
+        nr_passes=nr_passes,
         element_parser=lambda v: bool(v),
     )
+    plot_flow_rate = bool(visualisation["plot_flow_rate"])
+    export_velocity_profiles_pdf = bool(
+        visualisation["export_velocity_profiles_pdf"])
+    return (
+        plot_model,
+        model_gender,
+        model_mass,
+        model_height,
+        plot_global_filters,
+        plot_correlations,
+        [bool(v) for v in plot_window_layout],
+        plot_flow_rate,
+        export_velocity_profiles_pdf,
+    )
 
-    # Offer to update config if runtime adjustments changed values
+
+def load_config(config_file: Path | str | None) -> Config:
+    """Load TOML config, apply defaults, normalize settings, and return a Config."""
+
+    config_path = _resolve_config_path(config_file)
+    print(f"Reading configuration from: {config_path}.")
+
+    with config_path.open("rb") as fp:
+        user_cfg = tomllib.load(fp)
+
+    defaults = _read_packaged_default_config()
+    merged = _deep_merge(defaults, user_cfg)
+    original_snapshot = deepcopy(merged)
+
+    nr_passes = int(merged["nr_passes"])
+    if nr_passes < 1:
+        raise ValueError("nr_passes must be >= 1")
+
+    source = merged["source"]
+    camera = merged["camera"]
+    preprocessing = merged["preprocessing"]
+    correlation = merged["correlation"]
+    displacement = merged["displacement"]
+    postprocessing = merged["postprocessing"]
+    visualisation = merged["visualisation"]
+
+    image_dir, output_dir, frames_to_use, image_list = _parse_source(source)
+    print(f"Number of images to process: {len(image_list)}")
+    nr_images = len(image_list)
+
+    (
+        calib_spacing_mm,
+        camera_dir,
+        calib_dir,
+        timestamp,
+        framerate_hz,
+        timestep_s,
+        shutterspeed_ns,
+        image_width_px,
+        image_height_px,
+        image_width_m,
+        image_height_m,
+        scale_m_per_px,
+    ) = _parse_camera(camera, output_dir=output_dir)
+
+    ds_factor, crop_roi, background_dir_for_config, background_dir = _parse_preprocessing(
+        preprocessing,
+        nr_passes=nr_passes,
+        image_list=image_list,
+        output_dir=output_dir,
+    )
+
+    n_corrs_to_sum, n_windows, window_overlap = _parse_correlation(
+        correlation, nr_passes=nr_passes
+    )
+    n_peaks, min_peak_dist_px = _parse_displacement(
+        displacement, nr_passes=nr_passes)
+
+    (
+        outlier_filter_mode,
+        max_velocity_vy_vx_m_s,
+        flow_direction,
+        extra_vel_dim_m,
+        nb_size_tyx,
+        interp_nb_size_tyx,
+        nb_threshold,
+        time_smooth_lam,
+    ) = _parse_postprocessing(postprocessing, nr_passes=nr_passes)
+
+    (
+        plot_model,
+        model_gender,
+        model_mass,
+        model_height,
+        plot_global_filters,
+        plot_correlations,
+        plot_window_layout,
+        plot_flow_rate,
+        export_velocity_profiles_pdf,
+    ) = _parse_visualisation(visualisation, nr_passes=nr_passes)
+
+    _maybe_write_updated_config(
+        config_path=config_path,
+        original_snapshot=original_snapshot,
+        image_dir=image_dir,
+        output_dir=output_dir,
+        frames_to_use=frames_to_use,
+        camera_dir=camera_dir,
+        calib_dir=calib_dir,
+        calib_spacing_mm=calib_spacing_mm,
+        ds_factor=ds_factor,
+        background_dir_for_config=background_dir_for_config,
+        background_dir=background_dir,
+        crop_roi=crop_roi,
+    )
+
+    return Config(
+        config_path=config_path,
+        nr_passes=nr_passes,
+        image_dir=image_dir,
+        output_dir=output_dir,
+        frames_to_use=frames_to_use,
+        image_list=image_list,
+        nr_images=nr_images,
+        camera_dir=camera_dir,
+        calib_dir=calib_dir,
+        calib_spacing_mm=calib_spacing_mm,
+        timestamp=timestamp,
+        framerate_hz=framerate_hz,
+        timestep_s=timestep_s,
+        shutterspeed_ns=shutterspeed_ns,
+        image_width_px=image_width_px,
+        image_height_px=image_height_px,
+        image_width_m=image_width_m,
+        image_height_m=image_height_m,
+        scale_m_per_px=scale_m_per_px,
+        ds_factor=ds_factor,
+        background_dir=background_dir,
+        crop_roi=crop_roi,
+        n_corrs_to_sum=n_corrs_to_sum,
+        n_windows=n_windows,
+        window_overlap=window_overlap,
+        n_peaks=n_peaks,
+        min_peak_dist_px=min_peak_dist_px,
+        outlier_filter_mode=outlier_filter_mode,
+        max_velocity_vy_vx_m_s=max_velocity_vy_vx_m_s,
+        flow_direction=flow_direction,
+        extra_vel_dim_m=extra_vel_dim_m,
+        nb_size_tyx=nb_size_tyx,
+        interp_nb_size_tyx=interp_nb_size_tyx,
+        nb_threshold=nb_threshold,
+        time_smooth_lam=time_smooth_lam,
+        plot_model=plot_model,
+        model_gender=model_gender,
+        model_mass=model_mass,
+        model_height=model_height,
+        plot_global_filters=plot_global_filters,
+        plot_correlations=plot_correlations,
+        plot_window_layout=plot_window_layout,
+        plot_flow_rate=plot_flow_rate,
+        export_velocity_profiles_pdf=export_velocity_profiles_pdf,
+    )
+
+
+def _resolve_config_path(config_file: Path | str | None) -> Path:
+    config_path = Path(config_file) if config_file else None
+    if config_path and config_path.is_file():
+        return config_path
+
+    selected_path = ask_open_file(
+        key="config_file",
+        title="Select configuration file",
+        filetypes=(("TOML files", "*.toml"), ("All files", "*.*")),
+    )
+    if selected_path is None:
+        raise RuntimeError("No configuration file selected; aborting.")
+    return Path(selected_path)
+
+
+def _maybe_write_updated_config(
+    *,
+    config_path: Path,
+    original_snapshot: dict[str, Any],
+    image_dir: Path,
+    output_dir: Path,
+    frames_to_use: str | list[int],
+    camera_dir: Path,
+    calib_dir: Path,
+    calib_spacing_mm: float,
+    ds_factor: list[int],
+    background_dir_for_config: str,
+    background_dir: str,
+    crop_roi: tuple[int, int, int, int],
+) -> None:
     updated_snapshot = deepcopy(original_snapshot)
-    updated_snapshot["nr_passes"] = NR_PASSES
-
-    updated_snapshot.setdefault("source", {})
     updated_snapshot["source"].update(
         {
-            "image_dir": IMAGE_DIR,
-            "output_dir": OUTPUT_DIR,
-            "frames_to_use": FRAMES_TO_USE,
+            "image_dir": str(image_dir),
+            "output_dir": str(output_dir),
+            "frames_to_use": frames_to_use,
         }
     )
-    updated_snapshot.setdefault("camera", {})
     updated_snapshot["camera"].update(
         {
-            "camera_dir": CAMERA_DIR,
-            "calib_dir": CALIB_DIR,
-            "calib_spacing_mm": CALIB_SPACING_MM,
+            "camera_dir": str(camera_dir),
+            "calib_dir": str(calib_dir),
+            "calib_spacing_mm": calib_spacing_mm,
         }
     )
-    updated_snapshot.setdefault("preprocessing", {})
     updated_snapshot["preprocessing"].update(
         {
-            "ds_factor": DOWNSAMPLE_FACTOR,
-            # Preserve explicit user intent ('none'/'null') so it doesn't show up
-            # as a suggested config update.
-            "background_dir": (
-                background_dir_for_config if skip_background_generation else BACKGROUND_DIR
-            ),
-            "crop_roi": list(CROP_ROI),
+            "ds_factor": ds_factor,
+            "background_dir": (background_dir_for_config or background_dir),
+            "crop_roi": list(crop_roi),
         }
     )
 
@@ -500,12 +670,7 @@ def _maybe_generate_background(
     imgs = load_images(image_paths, show_progress=True)
     background = generate_background(imgs)
 
-    try:
-        cropped_bg = crop(background, crop_roi)
-    except ValueError as exc:
-        print(
-            f"Invalid crop ROI {crop_roi}; saving uncropped background. ({exc})")
-        cropped_bg = background
+    cropped_bg = crop(background, crop_roi)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"background_{timestamp_str()}.tif"
@@ -661,4 +826,4 @@ def _diff_dicts(original: dict[str, Any], updated: dict[str, Any]) -> list[tuple
 
 
 if __name__ == "__main__":
-    read_file(Path(__file__).resolve().parent / "config" / "config.toml")
+    load_config(Path(__file__).resolve().parent / "config" / "config.toml")

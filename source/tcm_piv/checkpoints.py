@@ -19,6 +19,7 @@ import csv
 import gzip
 import json
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,19 @@ class PassCheckpointPaths:
     post_csv: Path
     win_pos_csv: Path
     meta_json: Path
+
+
+class PassStage(Enum):
+    """Checkpoint stage for a pass.
+
+    - POST: postprocessed (final) checkpoint exists -> pass considered done.
+    - UNFILTERED: unfiltered peaks checkpoint exists -> can run postprocessing only.
+    - NONE: nothing exists -> full computation needed.
+    """
+
+    POST = "post"
+    UNFILTERED = "unfiltered"
+    NONE = "none"
 
 
 def init_run_dir(output_dir: Path, run_id: str) -> Path:
@@ -59,6 +73,36 @@ def pass_paths(run_dir: Path, pass_index_1b: int) -> PassCheckpointPaths:
         win_pos_csv=pass_dir / f"pass_{pass_index_1b:02d}_win_pos.csv",
         meta_json=pass_dir / f"pass_{pass_index_1b:02d}_meta.json",
     )
+
+
+def pass_stage(paths: PassCheckpointPaths) -> PassStage:
+    if paths.post_csv.exists():
+        return PassStage.POST
+    if paths.peaks_csv_gz.exists():
+        return PassStage.UNFILTERED
+    return PassStage.NONE
+
+
+def load_interpolated_mask_csv(
+    path: Path,
+    *,
+    n_pairs: int,
+    n_wy: int,
+    n_wx: int,
+) -> np.ndarray:
+    """Load `interpolated_mask.csv` as a boolean array of shape (n_pairs,n_wy,n_wx)."""
+
+    data = np.loadtxt(path, delimiter=",", skiprows=1)
+    if data.ndim != 2 or data.shape[1] != 4:
+        raise ValueError(
+            f"Unexpected interpolated mask CSV shape {data.shape} in {path}")
+
+    mask_flat = data[:, 3].astype(bool)
+    if mask_flat.size != n_pairs * n_wy * n_wx:
+        raise ValueError(
+            f"Unexpected interpolated mask size {mask_flat.size}, expected {n_pairs*n_wy*n_wx}"
+        )
+    return mask_flat.reshape(n_pairs, n_wy, n_wx)
 
 
 def write_meta_json(path: Path, meta: dict[str, Any]) -> None:
