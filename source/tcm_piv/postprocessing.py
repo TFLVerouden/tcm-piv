@@ -6,8 +6,108 @@ removing outliers, smoothing data, and other post-processing operations.
 """
 
 import numpy as np
-from scipy.interpolate import make_smoothing_spline
+from scipy.interpolate import griddata, make_smoothing_spline
 from tqdm import trange
+
+
+def _interp_center_from_nb(nb: np.ndarray) -> np.ndarray:
+    """Interpolate the center coordinate from a neighbourhood.
+
+    nb must have shape (n_t, n_y, n_x, 2).
+
+    Rules:
+    - If all three neighbourhood dims > 1: unsupported (3D interpolation).
+    - If exactly one dim > 1: use 1D interpolation.
+    - If exactly two dims > 1: use 2D interpolation.
+    - If no dim > 1: raise ValueError (no interpolation possible).
+
+    Notes:
+    - Interpolation is performed on index coordinates within the neighbourhood
+      (uniform grid), not physical coordinates.
+    - The center point is excluded from the fit.
+    """
+
+    nb = np.asarray(nb)
+    if nb.ndim != 4 or nb.shape[-1] != 2:
+        raise ValueError("nb must have shape (n_t, n_y, n_x, 2)")
+
+    n_t, n_y, n_x, _ = nb.shape
+    dims = (n_t > 1, n_y > 1, n_x > 1)
+    n_dims = int(sum(dims))
+    if n_dims == 0:
+        raise ValueError("interpolation neighbourhood has no dimension > 1")
+    if n_dims == 3:
+        raise NotImplementedError("3D interpolation is not supported")
+
+    ct, cy, cx = n_t // 2, n_y // 2, n_x // 2
+
+    nb_fit = nb.copy()
+    nb_fit[ct, cy, cx, :] = np.nan
+    valid = ~np.any(np.isnan(nb_fit), axis=-1)
+
+    # Fallback value: median of available values in the neighbourhood.
+    fallback = np.nanmedian(nb_fit.reshape(-1, 2), axis=0)
+
+    if n_dims == 1:
+        if n_t > 1:
+            xs = np.arange(n_t)
+            vals = nb_fit[:, 0, 0, :]
+            x0 = float(ct)
+        elif n_y > 1:
+            xs = np.arange(n_y)
+            vals = nb_fit[0, :, 0, :]
+            x0 = float(cy)
+        else:  # n_x > 1
+            xs = np.arange(n_x)
+            vals = nb_fit[0, 0, :, :]
+            x0 = float(cx)
+
+        vmask = ~np.any(np.isnan(vals), axis=-1)
+        if int(np.count_nonzero(vmask)) < 2:
+            return fallback
+
+        x_valid = xs[vmask].astype(float)
+        out = np.empty((2,), dtype=float)
+        for comp in range(2):
+            out[comp] = float(np.interp(x0, x_valid, vals[vmask, comp]))
+        return out
+
+    # n_dims == 2: 2D interpolation
+    coords: np.ndarray
+    q = np.array([[float(ct), float(cy), float(cx)]], dtype=float)
+    if n_t > 1 and n_y > 1:
+        tt, yy = np.indices((n_t, n_y))
+        valid2 = valid[:, :, 0]
+        coords = np.column_stack((tt[valid2].ravel(), yy[valid2].ravel()))
+        q2 = np.array([[q[0, 0], q[0, 1]]], dtype=float)
+        vals0 = nb_fit[:, :, 0, 0][valid2].ravel()
+        vals1 = nb_fit[:, :, 0, 1][valid2].ravel()
+    elif n_t > 1 and n_x > 1:
+        tt, xx = np.indices((n_t, n_x))
+        valid2 = valid[:, 0, :]
+        coords = np.column_stack((tt[valid2].ravel(), xx[valid2].ravel()))
+        q2 = np.array([[q[0, 0], q[0, 2]]], dtype=float)
+        vals0 = nb_fit[:, 0, :, 0][valid2].ravel()
+        vals1 = nb_fit[:, 0, :, 1][valid2].ravel()
+    else:  # n_y > 1 and n_x > 1
+        yy, xx = np.indices((n_y, n_x))
+        valid2 = valid[0, :, :]
+        coords = np.column_stack((yy[valid2].ravel(), xx[valid2].ravel()))
+        q2 = np.array([[q[0, 1], q[0, 2]]], dtype=float)
+        vals0 = nb_fit[0, :, :, 0][valid2].ravel()
+        vals1 = nb_fit[0, :, :, 1][valid2].ravel()
+
+    if coords.shape[0] < 3:
+        return fallback
+
+    out0 = griddata(coords, vals0, q2, method="linear")
+    out1 = griddata(coords, vals1, q2, method="linear")
+    if out0 is None or out1 is None:
+        return fallback
+    out = np.array([float(out0[0]), float(out1[0])], dtype=float)
+    if np.any(np.isnan(out)):
+        return fallback
+    return out
 
 
 def filter_outliers(mode: str, coords: np.ndarray, a: float | np.ndarray | None = None, b: float | None = None, verbose: bool = False):
@@ -188,11 +288,12 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
             - "y": Compare y coordinates only
             - "xy": Compare both x and y coordinates
             - "r": Compare vector lengths only
-        replace (bool | str): Replacement strategy for outliers:
+        replace (bool | str): Replacement strategy for outliers / NaN holes:
             - False: Set outliers to NaN
             - True or "median": Replace outliers with median of neighbours
             - "closest": Replace outliers with closest valid candidate peak,
                 but only if there is a non-outlier peak available.
+            - "interp": Interpolate the replacement value from neighbours.
         verbose (bool): If True, print summary statistics about filtering.
         timing (bool): If True, print timing information.
 
@@ -222,8 +323,9 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
     # Handle replace parameter
     if replace is True:
         replace = "median"
-    elif replace not in [False, "median", "closest"]:
-        raise ValueError("replace must be False, True, 'median', or 'closest'")
+    elif replace not in [False, "median", "closest", "interp"]:
+        raise ValueError(
+            "replace must be False, True, 'median', 'closest', or 'interp'")
 
     if replace == "closest" and was_4d:
         raise ValueError("'closest' replacement mode requires 5D input array")
@@ -275,13 +377,15 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
                         # Handle tuple or scalar threshold
                         if isinstance(thr, tuple):
                             # (thr_y, thr_x)
-                            thr_cur = np.array([thr[0] * std[0], thr[1] * std[1]])
+                            thr_cur = np.array(
+                                [thr[0] * std[0], thr[1] * std[1]])
                         else:
                             thr_cur = thr * std
                     elif thr_unit == "pxs":
                         # Handle tuple or scalar threshold for pixel mode
                         if isinstance(thr, tuple):
-                            thr_cur = np.array([thr[0], thr[1]])  # (thr_y, thr_x)
+                            # (thr_y, thr_x)
+                            thr_cur = np.array([thr[0], thr[1]])
                         else:
                             thr_cur = np.array([thr, thr])
                     else:
@@ -339,6 +443,11 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
                         # Only replace if we found a valid peak!
                         if closest_peak is not None:
                             coords_out[i, j, k, 0, :] = closest_peak
+                    elif replace == "interp":
+                        # nb has shape (2, n_t, n_y, n_x) due to the sliding_window_view usage
+                        nb_for_interp = np.moveaxis(nb, 0, -1)
+                        coords_out[i, j, k, 0, :] = _interp_center_from_nb(
+                            nb_for_interp)
                     elif not replace:
                         coords_out[i, j, k, 0, :] = np.array([np.nan, np.nan])
 

@@ -273,12 +273,14 @@ def run(
                 mask_csv = run_dir / "interpolated_mask.csv"
                 if mask_csv.exists():
                     try:
-                        mask_rows = np.loadtxt(mask_csv, delimiter=",", skiprows=1)
+                        mask_rows = np.loadtxt(
+                            mask_csv, delimiter=",", skiprows=1)
                         if mask_rows.ndim == 1 and mask_rows.size == 0:
                             final_interp_mask = None
                         else:
                             mask_flat = mask_rows[:, 3].astype(bool)
-                            final_interp_mask = mask_flat.reshape(n_pairs, n_wy, n_wx)
+                            final_interp_mask = mask_flat.reshape(
+                                n_pairs, n_wy, n_wx)
                     except Exception:
                         final_interp_mask = None
             prev_disp_final = disp_final
@@ -493,10 +495,11 @@ def run(
             if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
                 disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
 
-        # Final pass: patch remaining NaN holes by neighbourhood median
+        # Final pass: patch remaining NaN holes by interpolation
         if (
             pass_i == cfg.NR_PASSES - 1
             and interp_n_nbs is not None
+            and any(v > 1 for v in interp_n_nbs)
             and np.isnan(disp_final).any()
         ):
             disp_pre_interp = disp_final
@@ -507,7 +510,7 @@ def run(
                 thr=None,
                 n_nbs=interp_n_nbs,
                 mode="xy",
-                replace="median",
+                replace="interp",
                 verbose=True,
                 timing=True,
             )
