@@ -39,5 +39,6 @@ model_gender = "male"
 model_mass = 70.0
 model_height = 1.93
 plot_global_filters = true
+plot_correlations = false
 plot_window_layout = [true, true, true]
 plot_flow_rate = true

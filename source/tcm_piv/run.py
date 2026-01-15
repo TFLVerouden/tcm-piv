@@ -319,6 +319,21 @@ def run(
                 shifts=shifts,
             )
 
+            if bool(getattr(cfg, "PLOT_CORRELATIONS", False)):
+                plots_dir = run_dir / "plots"
+                corr_dir = plots_dir / "correlations" / f"pass_{pass_1b:02d}"
+                j_mid = int(n_wy) // 2
+                k_mid = int(n_wx) // 2
+                for pair_i in range(n_pairs):
+                    corr_map, corr_center = corrs_sum[(pair_i, j_mid, k_mid)]
+                    title = f"Pass {pass_1b} pair {pair_i} win ({j_mid},{k_mid})"
+                    viz.plot_correlation_map(
+                        np.asarray(corr_map),
+                        center_yx=(int(corr_center[0]), int(corr_center[1])),
+                        title=title,
+                        output_path=corr_dir / f"pair_{pair_i:04d}.png",
+                    )
+
             # 3) Find displacement peaks in the correlation planes.
             disp_unf, int_unf = piv.find_disps(
                 corrs_sum,

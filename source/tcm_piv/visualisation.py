@@ -224,6 +224,49 @@ def plot_flow_rate(
     return fig, ax
 
 
+def plot_correlation_map(
+    corr: np.ndarray,
+    *,
+    center_yx: tuple[int, int] | np.ndarray,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, Axes]:
+    """Plot a single correlation map with a marker at the provided center.
+
+    Args:
+        corr: 2D correlation array.
+        center_yx: (y, x) index of the zero-displacement reference point.
+        title: Optional plot title.
+        output_path: If provided, saves the figure to this path.
+    """
+
+    corr = np.asarray(corr)
+    if corr.ndim != 2:
+        raise ValueError("corr must be a 2D array")
+
+    c = np.asarray(center_yx).reshape(-1)
+    if c.size != 2:
+        raise ValueError("center_yx must have 2 elements (y, x)")
+    cy, cx = int(c[0]), int(c[1])
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(corr, cmap="viridis", origin="upper")
+    ax.plot(cx, cy, marker="+", markersize=14,
+            markeredgewidth=2.0, color="red", alpha=0.5)
+    ax.set_xlabel("x (px)")
+    ax.set_ylabel("y (px)")
+    if title:
+        ax.set_title(title)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+
+    return fig, ax
+
+
 def export_velocity_profiles_pdf(
     *,
     vel_final: np.ndarray,

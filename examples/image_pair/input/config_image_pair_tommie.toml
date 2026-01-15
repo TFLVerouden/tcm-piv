@@ -4,7 +4,6 @@ nr_passes = 3
 image_dir = "examples/image_pair/input"
 output_dir = "examples/image_pair/output"
 frames_to_use = "all"
-extra_vel_dim_m = 0.01
 
 [camera]
 camera_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/image_pair/output/camera_metadata/test_P-001_20260107_173921_260107_174151_metadata.json"
@@ -19,18 +18,20 @@ crop_roi = [0, 0, 0, 0]
 [correlation]
 corrs_to_sum = [1, 1, 1]
 nr_windows = [[1, 1],[1, 8],[1, 24]]
-window_overlap = 0.5
+window_overlap = [0, 0, 0.5]
 
 [displacement]
 nr_peaks = 10
 min_peak_distance = 1
 
 [postprocessing]
-max_velocity = [10, 200]
+outlier_filter_mode = ["semicircle_rect"]
+max_velocity = [[20, 100]]
 neighbourhood_size = [1, 1, 1]
 neighbourhood_threshold = 5
 time_smoothing_lambda = 0
 flow_direction = "y"
+extra_vel_dim_m = 0.01
 
 [visualisation]
 plot_model = true
@@ -38,6 +39,7 @@ model_gender = "male"
 model_mass = 70.0
 model_height = 1.93
 plot_global_filters = true
+plot_correlations = true
 plot_window_layout = true
 plot_flow_rate = true
 export_velocity_profiles_pdf = true

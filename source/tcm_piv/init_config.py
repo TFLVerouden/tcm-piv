@@ -113,6 +113,7 @@ MODEL_MASS: float
 MODEL_HEIGHT: float
 PLOT_GLOBAL_FILTERS: bool
 WINDOW_PLOT_ENABLED: list[bool]
+PLOT_CORRELATIONS: bool
 PLOT_FLOW_RATE: bool
 EXPORT_VELOCITY_PROFILES_PDF: bool
 
@@ -341,17 +342,18 @@ def read_file(config_file: Path | str | None) -> None:
         raise ValueError("postprocessing.flow_direction must be 'x' or 'y'")
 
     # formerly called "depth"
-    EXTRA_VEL_DIM_M = float(source["extra_vel_dim_m"])
+    EXTRA_VEL_DIM_M = float(postprocessing["extra_vel_dim_m"])
 
     # [visualisation]
     global PLOT_MODEL, MODEL_GENDER, MODEL_MASS, MODEL_HEIGHT
-    global PLOT_GLOBAL_FILTERS, WINDOW_PLOT_ENABLED, PLOT_FLOW_RATE, EXPORT_VELOCITY_PROFILES_PDF
+    global PLOT_GLOBAL_FILTERS, WINDOW_PLOT_ENABLED, PLOT_CORRELATIONS, PLOT_FLOW_RATE, EXPORT_VELOCITY_PROFILES_PDF
     PLOT_MODEL = bool(visualisation["plot_model"])
     MODEL_GENDER = str(visualisation["model_gender"])
     MODEL_MASS = float(visualisation["model_mass"])
     MODEL_HEIGHT = float(visualisation["model_height"])
 
     PLOT_GLOBAL_FILTERS = bool(visualisation["plot_global_filters"])
+    PLOT_CORRELATIONS = bool(visualisation["plot_correlations"])
     PLOT_FLOW_RATE = bool(visualisation["plot_flow_rate"])
     EXPORT_VELOCITY_PROFILES_PDF = bool(
         visualisation["export_velocity_profiles_pdf"]
