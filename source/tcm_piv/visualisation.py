@@ -18,6 +18,171 @@ from matplotlib.patches import Circle, Rectangle, Wedge
 from tcm_piv.preprocessing import split_n_shift
 
 
+def _as_temporal_disp_2col(displacements: np.ndarray) -> np.ndarray:
+    """Normalize displacement input to shape (n_time, 2) as (dy_px, dx_px)."""
+
+    disp = np.asarray(displacements)
+    if disp.ndim == 2 and disp.shape[1] == 2:
+        return disp
+    if disp.ndim == 4 and disp.shape[1:3] == (1, 1) and disp.shape[3] == 2:
+        return disp[:, 0, 0, :]
+    raise ValueError(
+        "displacements must be shape (n_time,2) or (n_time,1,1,2) for temporal plotting"
+    )
+
+
+def plot_temporal_displacements(
+    time_s: np.ndarray,
+    disp_raw: np.ndarray,
+    disp_smoothed: np.ndarray,
+    *,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Plot temporal displacements (dy, dx) as raw points + smoothed curve.
+
+    Notes:
+    - Intended for the single-window case (n_windows=(1,1)) where displacements
+      represent a single time-series.
+    - `disp_*` are expected in (dy_px, dx_px) order.
+    """
+
+    t = np.asarray(time_s).reshape(-1)
+    raw_2 = _as_temporal_disp_2col(disp_raw)
+    sm_2 = _as_temporal_disp_2col(disp_smoothed)
+    if raw_2.shape != sm_2.shape:
+        raise ValueError(
+            f"disp_raw and disp_smoothed must have same shape, got {raw_2.shape} vs {sm_2.shape}"
+        )
+    if raw_2.shape[0] != t.size:
+        raise ValueError(
+            f"time_s length must match displacements, got {t.size} vs {raw_2.shape[0]}"
+        )
+
+    t_ms = t * 1000.0
+    fig, (ax_dy, ax_dx) = plt.subplots(
+        nrows=2, ncols=1, figsize=(7.5, 6.0), sharex=True
+    )
+
+    dy_raw, dx_raw = raw_2[:, 0], raw_2[:, 1]
+    dy_sm, dx_sm = sm_2[:, 0], sm_2[:, 1]
+
+    m_dy = ~np.isnan(dy_raw)
+    m_dx = ~np.isnan(dx_raw)
+
+    ax_dy.scatter(
+        t_ms[m_dy],
+        dy_raw[m_dy],
+        s=12,
+        color="0.35",
+        alpha=0.6,
+        label="Raw",
+    )
+    ax_dy.plot(t_ms, dy_sm, color="tab:blue", linewidth=2.0, label="Smoothed")
+    ax_dy.set_ylabel("dy (px)")
+    ax_dy.grid(True, linestyle=":", alpha=0.5)
+    ax_dy.legend(loc="upper right")
+
+    ax_dx.scatter(
+        t_ms[m_dx],
+        dx_raw[m_dx],
+        s=12,
+        color="0.35",
+        alpha=0.6,
+        label="Raw",
+    )
+    ax_dx.plot(t_ms, dx_sm, color="tab:orange",
+               linewidth=2.0, label="Smoothed")
+    ax_dx.set_ylabel("dx (px)")
+    ax_dx.set_xlabel("Time (ms)")
+    ax_dx.grid(True, linestyle=":", alpha=0.5)
+    ax_dx.legend(loc="upper right")
+
+    if title:
+        fig.suptitle(title)
+
+    fig.tight_layout()
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+
+    return fig, (ax_dy, ax_dx)
+
+
+def plot_temporal_displacement_quantiles(
+    time_s: np.ndarray,
+    displacements: np.ndarray,
+    *,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Plot per-timestamp displacement quantiles across windows.
+
+    This is intended for multi-window passes where each timestamp has many
+    displacement vectors (one per window). The plot shows:
+    - median
+    - 25th percentile (Q1)
+    - 75th percentile (Q3)
+
+    Expected displacement shape: (n_time, n_win_y, n_win_x, 2) with (dy_px, dx_px).
+    """
+
+    t = np.asarray(time_s).reshape(-1)
+    disp = np.asarray(displacements)
+    if disp.ndim != 4 or disp.shape[-1] != 2:
+        raise ValueError(
+            "displacements must be shape (n_time, n_win_y, n_win_x, 2) for quantile plotting"
+        )
+    if disp.shape[0] != t.size:
+        raise ValueError(
+            f"time_s length must match displacements, got {t.size} vs {disp.shape[0]}"
+        )
+
+    n_time, n_wy, n_wx, _ = disp.shape
+    n_windows = int(n_wy) * int(n_wx)
+    disp_flat = disp.reshape(n_time, n_windows, 2)
+
+    dy = disp_flat[:, :, 0]
+    dx = disp_flat[:, :, 1]
+
+    dy_q25, dy_q50, dy_q75 = np.nanpercentile(dy, [25, 50, 75], axis=1)
+    dx_q25, dx_q50, dx_q75 = np.nanpercentile(dx, [25, 50, 75], axis=1)
+
+    t_ms = t * 1000.0
+    fig, (ax_dy, ax_dx) = plt.subplots(
+        nrows=2, ncols=1, figsize=(7.5, 6.0), sharex=True
+    )
+
+    ax_dy.fill_between(t_ms, dy_q25, dy_q75,
+                       color="tab:blue", alpha=0.2, label="Q1–Q3")
+    ax_dy.plot(t_ms, dy_q50, color="tab:blue", linewidth=2.0, label="Median")
+    ax_dy.set_ylabel("dy (px)")
+    ax_dy.grid(True, linestyle=":", alpha=0.5)
+    ax_dy.legend(loc="upper right")
+
+    ax_dx.fill_between(t_ms, dx_q25, dx_q75,
+                       color="tab:orange", alpha=0.2, label="Q1–Q3")
+    ax_dx.plot(t_ms, dx_q50, color="tab:orange", linewidth=2.0, label="Median")
+    ax_dx.set_ylabel("dx (px)")
+    ax_dx.set_xlabel("Time (ms)")
+    ax_dx.grid(True, linestyle=":", alpha=0.5)
+    ax_dx.legend(loc="upper right")
+
+    if title:
+        fig.suptitle(title)
+
+    fig.tight_layout()
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+
+    return fig, (ax_dy, ax_dx)
+
+
 def plot_filter_ranges(
     ranges: list[tuple[float, float]],
     *,

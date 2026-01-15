@@ -84,17 +84,16 @@ extra_vel_dim_m = 0.01
 # (time, y, x - includes itself as center point)
 nb_size_tyx = [1, 1, 1]
 
-# *Size of neighbourhood to patch NaN holes (final pass interpolation)
-# (time, y, x - includes itself as center point)
-# Use "none" to disable interpolation entirely.
-interp_nb_size_tyx = [1, 1, 1]
-
-
 # *How many standard deviations can a displacement be different from its neighbourhood
 nb_threshold = 1
 
 # *Smoothing parameter (larger = smoother). Works only on single window pass.
 time_smooth_lam = 0.0
+
+# *Size of neighbourhood to patch NaN holes (final pass interpolation)
+# (time, y, x - includes itself as center point)
+# Use "none" to disable interpolation entirely.
+interp_nb_size_tyx = [1, 1, 1]
 
 [visualisation]
 plot_model = false

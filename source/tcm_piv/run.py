@@ -530,12 +530,37 @@ def run(
                 print(
                     f"  temporal_smoothing: enabled (lambda={time_smooth_lam})"
                 )
+                disp_final_raw = disp_final.copy()
                 disp_final = piv.smooth(
                     time_s,
                     disp_final,
                     smoothing_lambda=time_smooth_lam,
                     dtype=int,
                 )
+
+                if pass_idx1 == 1:
+                    plots_dir = run_dir / "plots"
+                    viz.plot_temporal_displacements(
+                        time_s,
+                        disp_final_raw,
+                        disp_final,
+                        title=f"Pass {pass_idx1} displacements: raw vs smoothed (lambda={time_smooth_lam})",
+                        output_path=plots_dir
+                        / "displacements"
+                        / f"pass_{pass_idx1:02d}_temporal_smoothing.png",
+                    )
+
+        # For multi-window passes, summarize displacements over windows per timestamp.
+        if disp_final.ndim == 4 and disp_final.shape[-1] == 2 and disp_final.shape[1:3] != (1, 1):
+            plots_dir = run_dir / "plots"
+            viz.plot_temporal_displacement_quantiles(
+                time_s,
+                disp_final,
+                title=f"Pass {pass_idx1} displacements over windows (Q1/median/Q3)",
+                output_path=plots_dir
+                / "displacements"
+                / f"pass_{pass_idx1:02d}_window_quantiles.png",
+            )
 
         # Final pass: patch remaining NaN holes by interpolation
         if (
