@@ -11,26 +11,26 @@ calib_dir = "/Users/tommieverouden/Developer/tcm-piv/examples/image_pair/output/
 calib_spacing_mm = 1.0
 
 [preprocessing]
-downsample_factor = [4, 1, 1]
+ds_factor = [4, 1, 1]
 background_dir = "none"
 crop_roi = [0, 0, 0, 0]
 
 [correlation]
-corrs_to_sum = [1, 1, 1]
-nr_windows = [[1, 1],[1, 8],[1, 24]]
+n_corrs_to_sum = [1, 1, 1]
+n_windows = [[1, 1],[1, 8],[1, 24]]
 window_overlap = [0, 0, 0.5]
 
 [displacement]
-nr_peaks = 10
-min_peak_distance = 1
+n_peaks = 10
+min_peak_dist_px = 1
 
 [postprocessing]
 outlier_filter_mode = ["semicircle_rect"]
-max_velocity = [[100, 20]]
-neighbourhood_size = [1, 1, 1]
-interpolation_neighbourhood = [1, 1, 5]
-neighbourhood_threshold = 5
-time_smoothing_lambda = 0
+max_velocity_vy_vx = [[100, 20]]
+nb_size_tyx = [1, 1, 1]
+interp_nb_size_tyx = [1, 1, 5]
+nb_threshold = 5
+time_smooth_lam = 0
 flow_direction = "y"
 extra_vel_dim_m = 0.01
 

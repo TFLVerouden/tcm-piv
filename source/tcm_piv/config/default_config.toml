@@ -45,26 +45,26 @@ background_dir = ""
 # y_end/x_end: 0 means full extent; negative means offset from end.
 crop_roi = [0, 0, 0, 0]
 
-# *Sum pixels over squares of size (downsample_factor x downsample_factor)
-downsample_factor = 1      # or [f1, f2, ...]
+# *Sum pixels over squares of size (ds_factor x ds_factor)
+ds_factor = 1      # or [f1, f2, ...]
 
 [correlation]
 # *Number of correlation maps (time steps) that will be summed before starting
 # peak detection. Fancy averaging in time, basically.
-corrs_to_sum = 1
+n_corrs_to_sum = 1
 
 # *Number of interrogation windows as [n_y, n_x]
-nr_windows = [1, 1]        # or [[n_y, n_x], [n_y2, n_x2], ...]
+n_windows = [1, 1]        # or [[n_y, n_x], [n_y2, n_x2], ...]
 
 # *Overlap fraction between windows (0 means no overlap)
 window_overlap = 0.0       # 0..1
 
 [displacement]
 # *Number of peaks to save (to have multiple candidates to work with)
-nr_peaks = 1
+n_peaks = 1
 
 # *Minimum distance between peaks (in pixels)
-min_peak_distance = 5
+min_peak_dist_px = 5
 
 [postprocessing]
 # *Global outlier filter mode: "semicircle_rect" or "circle".
@@ -72,7 +72,7 @@ min_peak_distance = 5
 outlier_filter_mode = "semicircle_rect"
 
 # *Max velocity components [vy, vx] to use for the filter (they are absolute!)
-max_velocity = [75.0, 10.0]
+max_velocity_vy_vx = [75.0, 10.0]
 
 # Which in-plane velocity component represents the flow direction: "x" or "y"
 flow_direction = "x"
@@ -82,19 +82,19 @@ extra_vel_dim_m = 0.01
 
 # *Size of neighbourhood to consider for local filtering
 # (time, y, x - includes itself as center point)
-neighbourhood_size = [1, 1, 1]
+nb_size_tyx = [1, 1, 1]
 
 # *Size of neighbourhood to patch NaN holes (final pass interpolation)
 # (time, y, x - includes itself as center point)
 # Use "none" to disable interpolation entirely.
-interpolation_neighbourhood = [1, 1, 1]
+interp_nb_size_tyx = [1, 1, 1]
 
 
 # *How many standard deviations can a displacement be different from its neighbourhood
-neighbourhood_threshold = 1
+nb_threshold = 1
 
 # *Smoothing parameter (larger = smoother). Works only on single window pass.
-time_smoothing_lambda = 0.0
+time_smooth_lam = 0.0
 
 [visualisation]
 plot_model = false

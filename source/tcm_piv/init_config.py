@@ -230,7 +230,7 @@ def read_file(config_file: Path | str | None) -> None:
     # [preprocessing]
     global DOWNSAMPLE_FACTOR, BACKGROUND_DIR, CROP_ROI
     DOWNSAMPLE_FACTOR = _per_pass(
-        preprocessing["downsample_factor"],
+        preprocessing["ds_factor"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
@@ -262,12 +262,12 @@ def read_file(config_file: Path | str | None) -> None:
     # [correlation]
     global CORRS_TO_SUM, NR_WINDOWS, WINDOW_OVERLAP
     CORRS_TO_SUM = _per_pass(
-        correlation["corrs_to_sum"],
+        correlation["n_corrs_to_sum"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
     NR_WINDOWS = _per_pass(
-        correlation["nr_windows"],
+        correlation["n_windows"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_int_tuple(v, length=2),
         tuple_len=2,
@@ -281,12 +281,12 @@ def read_file(config_file: Path | str | None) -> None:
     # [displacement]
     global NR_PEAKS, MIN_PEAK_DISTANCE
     NR_PEAKS = _per_pass(
-        displacement["nr_peaks"],
+        displacement["n_peaks"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
     MIN_PEAK_DISTANCE = _per_pass(
-        displacement["min_peak_distance"],
+        displacement["min_peak_dist_px"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
@@ -294,13 +294,13 @@ def read_file(config_file: Path | str | None) -> None:
     # [postprocessing]
     global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, EXTRA_VEL_DIM_M, OUTLIER_FILTER_MODE, INTERPOLATION_NEIGHBOURHOOD
     MAX_VELOCITY = _per_pass(
-        postprocessing["max_velocity"],
+        postprocessing["max_velocity_vy_vx"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_float_tuple(v, length=2),
         tuple_len=2,
     )
     NEIGHBOURHOOD_SIZE = _per_pass(
-        postprocessing["neighbourhood_size"],
+        postprocessing["nb_size_tyx"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_int_tuple(v, length=3),
         tuple_len=3,
@@ -312,7 +312,7 @@ def read_file(config_file: Path | str | None) -> None:
         return _as_int_tuple(v, length=3)  # type: ignore[return-value]
 
     INTERPOLATION_NEIGHBOURHOOD = _per_pass(
-        postprocessing["interpolation_neighbourhood"],
+        postprocessing["interp_nb_size_tyx"],
         nr_passes=NR_PASSES,
         element_parser=_parse_interp_nb,
         tuple_len=3,
@@ -326,7 +326,7 @@ def read_file(config_file: Path | str | None) -> None:
             return (int(v[0]), int(v[1]))
         return int(v)
 
-    thr_value = postprocessing["neighbourhood_threshold"]
+    thr_value = postprocessing["nb_threshold"]
     if (
         isinstance(thr_value, list)
         and _is_scalar_sequence(thr_value)
@@ -343,7 +343,7 @@ def read_file(config_file: Path | str | None) -> None:
         )
 
     TIME_SMOOTHING_LAMBDA = _per_pass(
-        postprocessing["time_smoothing_lambda"],
+        postprocessing["time_smooth_lam"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: float(v),
     )
@@ -410,7 +410,7 @@ def read_file(config_file: Path | str | None) -> None:
     updated_snapshot.setdefault("preprocessing", {})
     updated_snapshot["preprocessing"].update(
         {
-            "downsample_factor": DOWNSAMPLE_FACTOR,
+            "ds_factor": DOWNSAMPLE_FACTOR,
             # Preserve explicit user intent ('none'/'null') so it doesn't show up
             # as a suggested config update.
             "background_dir": (
