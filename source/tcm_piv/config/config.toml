@@ -16,6 +16,9 @@ downsample_factor = [4, 1, 1]
 background_dir = "examples/two_frames/output/background_260110_002535.tif"
 crop_roi = [0, 0, 0, 0]
 
+# To skip background subtraction and also skip the prompt to generate one, set:
+# background_dir = "none"
+
 [correlation]
 corrs_to_sum = [40, 40, 1]
 nr_windows = [[1, 1], [1, 8], [1, 16]]

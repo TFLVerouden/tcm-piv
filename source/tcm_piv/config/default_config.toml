@@ -36,7 +36,9 @@ calib_dir = ""
 calib_spacing_mm = 1.0
 
 [preprocessing]
-# Background image to subtract. Empty string means: not provided, will ask to generate.
+# Background image to subtract.
+# - "": not provided, will ask to generate
+# - "none": skip background subtraction and skip generation prompt
 background_dir = ""
 
 # Crop ROI (y_start, y_end, x_start, x_end)

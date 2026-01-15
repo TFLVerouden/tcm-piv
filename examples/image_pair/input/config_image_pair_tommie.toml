@@ -12,7 +12,7 @@ calib_spacing_mm = 1.0
 
 [preprocessing]
 downsample_factor = [4, 1, 1]
-background_dir = ""
+background_dir = "none"
 crop_roi = [0, 0, 0, 0]
 
 [correlation]

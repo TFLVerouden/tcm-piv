@@ -234,13 +234,23 @@ def read_file(config_file: Path | str | None) -> None:
         element_parser=lambda v: int(v),
     )
     BACKGROUND_DIR = preprocessing["background_dir"]
-    BACKGROUND_DIR = "" if BACKGROUND_DIR is None else str(BACKGROUND_DIR)
+    bg_cfg_str = "" if bg_cfg_raw is None else str(bg_cfg_raw)
+    bg_cfg_norm = bg_cfg_str.strip().lower()
+
+    # "none" / "null" is a user intent signal: do not generate, do not subtract.
+    # Keep the *config* value around so we don't suggest rewriting it.
+    skip_background_generation = bg_cfg_norm in {"none", "null"}
+    background_dir_for_config = bg_cfg_str if skip_background_generation else ""
+
+    BACKGROUND_DIR = bg_cfg_str
+    if skip_background_generation:
+        BACKGROUND_DIR = ""
 
     roi_value = preprocessing["crop_roi"]
     CROP_ROI = tuple(_as_int_tuple(roi_value, length=4)
                      )  # type: ignore[assignment]
 
-    if not BACKGROUND_DIR:
+    if not BACKGROUND_DIR and not skip_background_generation:
         BACKGROUND_DIR = _maybe_generate_background(
             image_paths=IMAGE_LIST,
             output_dir=Path(OUTPUT_DIR),
@@ -388,7 +398,11 @@ def read_file(config_file: Path | str | None) -> None:
     updated_snapshot["preprocessing"].update(
         {
             "downsample_factor": DOWNSAMPLE_FACTOR,
-            "background_dir": BACKGROUND_DIR,
+            # Preserve explicit user intent ('none'/'null') so it doesn't show up
+            # as a suggested config update.
+            "background_dir": (
+                background_dir_for_config if skip_background_generation else BACKGROUND_DIR
+            ),
             "crop_roi": list(CROP_ROI),
         }
     )
