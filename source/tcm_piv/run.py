@@ -154,6 +154,7 @@ def run(
     window_layouts: list[dict[str, Any]] = []
     # (vector overlay plotting removed for now)
     final_disp_final: np.ndarray | None = None
+    final_interp_mask: np.ndarray | None = None
 
     # Lazily loaded image stack. We only load if we need correlation.
     imgs: np.ndarray | None = None
@@ -201,6 +202,16 @@ def run(
         thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_i)
         n_nbs = tuple(int(x)
                       for x in _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_i))
+        interp_nb_val = _per_pass(cfg.INTERPOLATION_NEIGHBOURHOOD, pass_i)
+        interp_n_nbs: tuple[int, int, int] | None
+        if interp_nb_val is None:
+            interp_n_nbs = None
+        else:
+            interp_n_nbs = (
+                int(interp_nb_val[0]),
+                int(interp_nb_val[1]),
+                int(interp_nb_val[2]),
+            )
         lam = float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_i))
 
         ds_fac = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_i))
@@ -258,6 +269,18 @@ def run(
 
             if pass_i == cfg.NR_PASSES - 1:
                 final_disp_final = disp_final
+                # Best-effort load of interpolation mask (if previously saved).
+                mask_csv = run_dir / "interpolated_mask.csv"
+                if mask_csv.exists():
+                    try:
+                        mask_rows = np.loadtxt(mask_csv, delimiter=",", skiprows=1)
+                        if mask_rows.ndim == 1 and mask_rows.size == 0:
+                            final_interp_mask = None
+                        else:
+                            mask_flat = mask_rows[:, 3].astype(bool)
+                            final_interp_mask = mask_flat.reshape(n_pairs, n_wy, n_wx)
+                    except Exception:
+                        final_interp_mask = None
             prev_disp_final = disp_final
             continue
 
@@ -428,6 +451,10 @@ def run(
             raise ValueError(
                 f"neighbourhood_size must have 3 elements, got {n_nbs}")
 
+        if interp_n_nbs is not None and len(interp_n_nbs) != 3:
+            raise ValueError(
+                f"interpolation_neighbourhood must have 3 elements, got {interp_n_nbs}")
+
         if nb_replace == "closest":
             disp_nbs_5d = piv.filter_neighbours(
                 disp_glo_5d,
@@ -465,6 +492,28 @@ def run(
         if lam and lam > 0:
             if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
                 disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
+
+        # Final pass: patch remaining NaN holes by neighbourhood median
+        if (
+            pass_i == cfg.NR_PASSES - 1
+            and interp_n_nbs is not None
+            and np.isnan(disp_final).any()
+        ):
+            disp_pre_interp = disp_final
+            nan_mask = np.any(np.isnan(disp_pre_interp), axis=-1)
+
+            disp_patched = piv.filter_neighbours(
+                disp_pre_interp,
+                thr=None,
+                n_nbs=interp_n_nbs,
+                mode="xy",
+                replace="median",
+                verbose=True,
+                timing=True,
+            )
+            filled_mask = nan_mask & (~np.any(np.isnan(disp_patched), axis=-1))
+            final_interp_mask = filled_mask
+            disp_final = disp_patched
 
         if plot_windows:
             window_layouts.append({
@@ -528,6 +577,22 @@ def run(
             comments="",
         )
 
+        if final_interp_mask is not None:
+            interp_csv = run_dir / "interpolated_mask.csv"
+            interp_flat = final_interp_mask.reshape(-1).astype(np.int64)
+            np.savetxt(
+                interp_csv,
+                np.column_stack([
+                    pair_index,
+                    win_y,
+                    win_x,
+                    interp_flat,
+                ]),
+                delimiter=",",
+                header="pair_index,win_y,win_x,interpolated",
+                comments="",
+            )
+
         flow_csv = run_dir / "flow_rate.csv"
         np.savetxt(
             flow_csv,
@@ -588,6 +653,7 @@ def run(
             ds_fac_final = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, final_pass_i))
             viz.export_velocity_profiles_pdf(
                 vel_final=vel_final,
+                interpolated_mask=final_interp_mask,
                 image=image_for_plots,
                 n_wins=(int(n_wins_final[0]), int(n_wins_final[1])),
                 overlap=overlap_final,

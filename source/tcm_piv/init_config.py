@@ -99,6 +99,7 @@ MIN_PEAK_DISTANCE: list[int] | int
 # [postprocessing]
 MAX_VELOCITY: list[tuple[float, float]] | tuple[float, float]
 NEIGHBOURHOOD_SIZE: list[tuple[int, int, int]] | tuple[int, int, int]
+INTERPOLATION_NEIGHBOURHOOD: list[tuple[int, int, int] | None]
 NEIGHBOURHOOD_THRESHOLD: list[int | tuple[int, int]] | int | tuple[int, int]
 TIME_SMOOTHING_LAMBDA: list[float] | float
 FLOW_DIRECTION: str
@@ -233,7 +234,7 @@ def read_file(config_file: Path | str | None) -> None:
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
-    BACKGROUND_DIR = preprocessing["background_dir"]
+    bg_cfg_raw = preprocessing["background_dir"]
     bg_cfg_str = "" if bg_cfg_raw is None else str(bg_cfg_raw)
     bg_cfg_norm = bg_cfg_str.strip().lower()
 
@@ -291,7 +292,7 @@ def read_file(config_file: Path | str | None) -> None:
     )
 
     # [postprocessing]
-    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, EXTRA_VEL_DIM_M, OUTLIER_FILTER_MODE
+    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, EXTRA_VEL_DIM_M, OUTLIER_FILTER_MODE, INTERPOLATION_NEIGHBOURHOOD
     MAX_VELOCITY = _per_pass(
         postprocessing["max_velocity"],
         nr_passes=NR_PASSES,
@@ -302,6 +303,18 @@ def read_file(config_file: Path | str | None) -> None:
         postprocessing["neighbourhood_size"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_int_tuple(v, length=3),
+        tuple_len=3,
+    )
+
+    def _parse_interp_nb(v: Any) -> tuple[int, int, int] | None:
+        if isinstance(v, str) and v.strip().lower() in {"none", "null"}:
+            return None
+        return _as_int_tuple(v, length=3)  # type: ignore[return-value]
+
+    INTERPOLATION_NEIGHBOURHOOD = _per_pass(
+        postprocessing["interpolation_neighbourhood"],
+        nr_passes=NR_PASSES,
+        element_parser=_parse_interp_nb,
         tuple_len=3,
     )
 

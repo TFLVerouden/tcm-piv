@@ -270,6 +270,7 @@ def plot_correlation_map(
 def export_velocity_profiles_pdf(
     *,
     vel_final: np.ndarray,
+    interpolated_mask: np.ndarray | None = None,
     image: np.ndarray,
     n_wins: tuple[int, int],
     overlap: float,
@@ -295,6 +296,13 @@ def export_velocity_profiles_pdf(
         raise ValueError("vel_final must have shape (n_pairs, n_y, n_x, 2)")
 
     n_pairs, n_y, n_x, _ = vel_final.shape
+    if interpolated_mask is not None:
+        interpolated_mask = np.asarray(interpolated_mask)
+        if interpolated_mask.shape != (n_pairs, n_y, n_x):
+            raise ValueError(
+                "interpolated_mask must have shape (n_pairs, n_y, n_x) matching vel_final"
+            )
+
     if (n_y, n_x) != (int(n_wins[0]), int(n_wins[1])):
         # Keep it strict so we don't silently plot the wrong geometry.
         raise ValueError(
@@ -360,10 +368,27 @@ def export_velocity_profiles_pdf(
             cross = np.nanmean(
                 vel_final[pair_i, :, :, cross_idx], axis=0)[order]
 
+            interp_cols = None
+            if interpolated_mask is not None:
+                # Mark a column if any y-position in that column was interpolated.
+                interp_cols = np.any(
+                    interpolated_mask[pair_i, :, :], axis=0)[order]
+
             fig, ax = plt.subplots(figsize=(6.5, 6.5))
             ax.plot(stream, dist_profile, "-o",
                     label=stream_label, markersize=3)
             ax.plot(cross, dist_profile, "-o", label=cross_label, markersize=3)
+
+            if interp_cols is not None and np.any(interp_cols):
+                ax.plot(
+                    stream[interp_cols],
+                    dist_profile[interp_cols],
+                    linestyle="none",
+                    marker="x",
+                    markersize=6,
+                    color="crimson",
+                    label="interpolated",
+                )
 
             ax.set_xlabel("Velocity (m/s)")
             ax.set_ylabel("Distance from centre (m)")

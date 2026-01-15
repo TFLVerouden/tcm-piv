@@ -164,7 +164,7 @@ def _outlier_dist(coord, med, threshold, mode):
     return is_outl, dist
 
 
-def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int] = 3, thr: float | tuple[float, float] = 1, thr_unit: str = "std", mode: str = "xy", replace: bool | str = False, verbose: bool = False, timing: bool = False) -> np.ndarray:
+def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int] = 3, thr: float | tuple[float, float] | None = 1, thr_unit: str = "std", mode: str = "xy", replace: bool | str = False, verbose: bool = False, timing: bool = False) -> np.ndarray:
     """
     Filter out coordinates that are too different from their neighbours.
 
@@ -174,13 +174,15 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
         n_nbs (int | str | tuple): Size of neighbourhood in each dimension
             to consider for filtering (including center point). Can be
             an integer, "all", or a tuple of three values (int or "all").
-        thr (float | tuple[float, float]): Threshold; how many standard
+        thr (float | tuple[float, float] | None): Threshold; how many standard
             deviations or pixels can a point be away from its neighbours.
-            Can be a single value (applied to both x and y)
-            or a tuple (thr_y, thr_x) for separate thresholds.
+            Can be a single value (applied to both x and y), a tuple (thr_y, thr_x)
+            for separate thresholds, or None to skip outlier checking and only
+            patch NaNs via the chosen replacement strategy.
         thr_unit (str): Unit of the threshold:
             - "std": Standard deviations (default)
             - "pxs": Pixels (absolute distance)
+            Ignored when thr is None.
         mode (str): Which coords should be within threshold from the median:
             - "x": Compare x coordinates only
             - "y": Compare y coordinates only
@@ -230,6 +232,9 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
     coords_out = coords.copy()
     coords_work = strip_peaks(coords, axis=-2, mode='reduce', verbose=False)
 
+    # Allow disabling outlier detection to only patch NaNs
+    use_outlier_check = thr is not None
+
     # Get a set of sliding windows around each (bulk) coordinate
     nbs = np.lib.stride_tricks.sliding_window_view(coords_work,
                                                    (n_nbs[0], n_nbs[1], n_nbs[2], 1))[..., 0]
@@ -261,23 +266,28 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
                 # COORDINATE VALIDATION
                 # Calculate actual threshold based on mode
-                if thr_unit == "std":
-                    std = np.nanstd(nb, axis=(1, 2, 3))
-                    # Skip if std is invalid
-                    if np.any(np.isnan(std)) or np.any(std == 0):
-                        continue
-                    # Handle tuple or scalar threshold
-                    if isinstance(thr, tuple):
-                        # (thr_y, thr_x)
-                        thr_cur = np.array([thr[0] * std[0], thr[1] * std[1]])
+                if use_outlier_check:
+                    if thr_unit == "std":
+                        std = np.nanstd(nb, axis=(1, 2, 3))
+                        # Skip if std is invalid
+                        if np.any(np.isnan(std)) or np.any(std == 0):
+                            continue
+                        # Handle tuple or scalar threshold
+                        if isinstance(thr, tuple):
+                            # (thr_y, thr_x)
+                            thr_cur = np.array([thr[0] * std[0], thr[1] * std[1]])
+                        else:
+                            thr_cur = thr * std
+                    elif thr_unit == "pxs":
+                        # Handle tuple or scalar threshold for pixel mode
+                        if isinstance(thr, tuple):
+                            thr_cur = np.array([thr[0], thr[1]])  # (thr_y, thr_x)
+                        else:
+                            thr_cur = np.array([thr, thr])
                     else:
-                        thr_cur = thr * std
-                else:  # thr_unit == "pxs"
-                    # Handle tuple or scalar threshold for pixel mode
-                    if isinstance(thr, tuple):
-                        thr_cur = np.array([thr[0], thr[1]])  # (thr_y, thr_x)
-                    else:
-                        thr_cur = np.array([thr, thr])
+                        raise ValueError("thr_unit must be 'std' or 'pxs'")
+                else:
+                    thr_cur = None
 
                 # Get the coordinate to check
                 coord = coords[i, j, k, 0, :]
@@ -287,7 +297,7 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
 
                 # Check if the current coordinate is an outlier
                 is_outl = False
-                if not is_nan:
+                if not is_nan and use_outlier_check and thr_cur is not None:
                     is_outl, _ = _outlier_dist(coord, med, thr_cur, mode)
 
                 # Update counters for verbose mode
@@ -315,8 +325,12 @@ def filter_neighbours(coords: np.ndarray, n_nbs: int | str | tuple[int, int, int
                                 continue
 
                             # Check if it is outlier
-                            is_outl, dist = _outlier_dist(peak, med,
-                                                          thr_cur, mode)
+                            if use_outlier_check and thr_cur is not None:
+                                is_outl, dist = _outlier_dist(peak, med,
+                                                              thr_cur, mode)
+                            else:
+                                is_outl = False
+                                dist = np.linalg.norm(peak - med)
 
                             if not is_outl and dist < min_distance:
                                 min_distance = dist

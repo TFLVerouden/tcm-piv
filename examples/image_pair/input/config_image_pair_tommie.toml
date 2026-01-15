@@ -28,6 +28,7 @@ min_peak_distance = 1
 outlier_filter_mode = ["semicircle_rect"]
 max_velocity = [[20, 100]]
 neighbourhood_size = [1, 1, 1]
+interpolation_neighbourhood = [1, 1, 5]
 neighbourhood_threshold = 5
 time_smoothing_lambda = 0
 flow_direction = "y"

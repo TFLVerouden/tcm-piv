@@ -82,7 +82,12 @@ extra_vel_dim_m = 0.01
 
 # *Size of neighbourhood to consider for local filtering
 # (time, y, x - includes itself as center point)
-neighbourhood_size = [3, 3, 3]
+neighbourhood_size = [1, 1, 1]
+
+# *Size of neighbourhood to patch NaN holes (final pass interpolation)
+# (time, y, x - includes itself as center point)
+# Use "none" to disable interpolation entirely.
+interpolation_neighbourhood = [1, 1, 1]
 
 # *How many standard deviations can a displacement be different from its neighbourhood
 neighbourhood_threshold = 1
