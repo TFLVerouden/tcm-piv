@@ -26,7 +26,7 @@ min_peak_distance = 1
 
 [postprocessing]
 outlier_filter_mode = ["semicircle_rect"]
-max_velocity = [[20, 100]]
+max_velocity = [[100, 20]]
 neighbourhood_size = [1, 1, 1]
 interpolation_neighbourhood = [1, 1, 5]
 neighbourhood_threshold = 5

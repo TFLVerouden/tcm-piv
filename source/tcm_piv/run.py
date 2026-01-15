@@ -171,11 +171,12 @@ def run(
     print(f"Timebase: {len(frames)} frames -> {len(frames) - 1} pairs")
     time_s = piv.get_time(frames, float(cfg.TIMESTEP_S))
 
-    filter_ranges: list[tuple[float, float]] = []
+    # For plotting filter ranges we keep (vx, vy) ordering.
+    filter_ranges_vx_vy: list[tuple[float, float]] = []
     window_layouts: list[dict[str, Any]] = []
     # (vector overlay plotting removed for now)
-    final_disp_final: np.ndarray | None = None
-    final_interp_mask: np.ndarray | None = None
+    disp_final_lastpass: np.ndarray | None = None
+    interp_filled_mask: np.ndarray | None = None
 
     # Lazily loaded image stack. We only load if we need correlation.
     imgs: np.ndarray | None = None
@@ -189,90 +190,93 @@ def run(
             f"start_pass ({start_pass_1b}) exceeds configured nr_passes ({cfg.NR_PASSES})"
         )
 
-    for pass_i in range(cfg.NR_PASSES):
-        pass_1b = pass_i + 1
-        paths = pass_paths(run_dir, pass_1b)
+    for pass_idx0 in range(cfg.NR_PASSES):
+        pass_idx1 = pass_idx0 + 1
+        paths = pass_paths(run_dir, pass_idx1)
 
-        plot_windows = bool(_per_pass(cfg.WINDOW_PLOT_ENABLED, pass_i))
+        plot_windows = bool(_per_pass(cfg.WINDOW_PLOT_ENABLED, pass_idx0))
         # vector overlays removed for now
 
-        n_wins = tuple(_per_pass(cfg.NR_WINDOWS, pass_i))
-        n_wy, n_wx = int(n_wins[0]), int(n_wins[1])
-        n_pairs = len(time_s)
+        n_wins = tuple(_per_pass(cfg.NR_WINDOWS, pass_idx0))
+        n_win_y, n_win_x = int(n_wins[0]), int(n_wins[1])
+        n_img_pairs = len(time_s)
 
         print(
-            f"\nPASS {pass_1b:02d}/{int(cfg.NR_PASSES):02d}: n_wins=({n_wy},{n_wx})"
+            f"\nPASS {pass_idx1:02d}/{int(cfg.NR_PASSES):02d}: n_wins=({n_win_y},{n_win_x})"
         )
 
-        if pass_1b < start_pass_1b:
+        if pass_idx1 < start_pass_1b:
             if resume_path is None:
                 raise ValueError(
                     "start_pass_1b > 1 requires resume_run_dir pointing to an existing run"
                 )
             if not paths.post_csv.exists():
                 raise RuntimeError(
-                    f"Requested start at pass {start_pass_1b}, but prior pass {pass_1b} has no post file: {paths.post_csv}"
+                    f"Requested start at pass {start_pass_1b}, but prior pass {pass_idx1} has no post file: {paths.post_csv}"
                 )
             print(
-                f"Skipping pass {pass_1b:02d} (before start_pass). Loading post checkpoint: {paths.post_csv.name}"
+                f"Skipping pass {pass_idx1:02d} (before start_pass). Loading post checkpoint: {paths.post_csv.name}"
             )
             _, _, _, prev_disp_final = load_postprocessed_csv(
                 paths.post_csv,
-                n_pairs=n_pairs,
-                n_wy=n_wy,
-                n_wx=n_wx,
+                n_pairs=n_img_pairs,
+                n_wy=n_win_y,
+                n_wx=n_win_x,
             )
             continue
 
-        vx_max, vy_max = _per_pass(cfg.MAX_VELOCITY, pass_i)
-        filter_ranges.append((float(vx_max), float(vy_max)))
+        # Config ordering is always [vy, vx].
+        vy_max_m_s, vx_max_m_s = _per_pass(cfg.MAX_VELOCITY, pass_idx0)
+        filter_ranges_vx_vy.append((float(vx_max_m_s), float(vy_max_m_s)))
 
-        thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_i)
-        n_nbs = tuple(int(x)
-                      for x in _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_i))
-        interp_nb_val = _per_pass(cfg.INTERPOLATION_NEIGHBOURHOOD, pass_i)
-        interp_n_nbs: tuple[int, int, int] | None
-        if interp_nb_val is None:
-            interp_n_nbs = None
+        nb_thr = _per_pass(cfg.NEIGHBOURHOOD_THRESHOLD, pass_idx0)
+        nb_size_tyx = tuple(int(x)
+                            for x in _per_pass(cfg.NEIGHBOURHOOD_SIZE, pass_idx0))
+        interp_nb_cfg = _per_pass(cfg.INTERPOLATION_NEIGHBOURHOOD, pass_idx0)
+        interp_nb_size_tyx: tuple[int, int, int] | None
+        if interp_nb_cfg is None:
+            interp_nb_size_tyx = None
         else:
-            interp_n_nbs = (
-                int(interp_nb_val[0]),
-                int(interp_nb_val[1]),
-                int(interp_nb_val[2]),
+            interp_nb_size_tyx = (
+                int(interp_nb_cfg[0]),
+                int(interp_nb_cfg[1]),
+                int(interp_nb_cfg[2]),
             )
-        lam = float(_per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_i))
+        time_smooth_lam = float(
+            _per_pass(cfg.TIME_SMOOTHING_LAMBDA, pass_idx0))
 
-        ds_fac = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_i))
-        corrs_to_sum = int(_per_pass(cfg.CORRS_TO_SUM, pass_i))
-        nr_peaks = int(_per_pass(cfg.NR_PEAKS, pass_i))
-        min_peak_dist = int(_per_pass(cfg.MIN_PEAK_DISTANCE, pass_i))
-        overlap = float(_per_pass(cfg.WINDOW_OVERLAP, pass_i))
+        ds_factor = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, pass_idx0))
+        n_corrs_to_sum = int(_per_pass(cfg.CORRS_TO_SUM, pass_idx0))
+        n_peaks = int(_per_pass(cfg.NR_PEAKS, pass_idx0))
+        min_peak_dist_px = int(_per_pass(cfg.MIN_PEAK_DISTANCE, pass_idx0))
+        overlap = float(_per_pass(cfg.WINDOW_OVERLAP, pass_idx0))
 
         print("Pass parameters:")
-        print(f"  downsample_factor: {ds_fac}")
-        print(f"  corrs_to_sum: {corrs_to_sum}")
-        print(f"  nr_peaks: {nr_peaks}")
-        print(f"  min_peak_distance: {min_peak_dist}")
+        print(f"  downsample_factor: {ds_factor}")
+        print(f"  corrs_to_sum: {n_corrs_to_sum}")
+        print(f"  nr_peaks: {n_peaks}")
+        print(f"  min_peak_distance_px: {min_peak_dist_px}")
         print(f"  window_overlap: {overlap}")
-        print(f"  max_velocity (vx,vy) [m/s]: ({vx_max},{vy_max})")
+        print(f"  max_velocity (vy,vx) [m/s]: ({vy_max_m_s},{vx_max_m_s})")
 
         # Metadata is written once the pass completes.
         # It documents shapes, key config knobs, and the filenames that belong
         # to this pass. This is also the closest thing to a “checkpoint index”.
         meta: dict[str, Any] = {
-            "pass": pass_1b,
-            "n_pairs": n_pairs,
-            "n_windows": [n_wy, n_wx],
-            "downsample_factor": ds_fac,
-            "corrs_to_sum": corrs_to_sum,
-            "nr_peaks": nr_peaks,
-            "min_peak_distance": min_peak_dist,
+            "pass": pass_idx1,
+            "n_pairs": n_img_pairs,
+            "n_windows": [n_win_y, n_win_x],
+            "downsample_factor": ds_factor,
+            "corrs_to_sum": n_corrs_to_sum,
+            "nr_peaks": n_peaks,
+            "min_peak_distance": min_peak_dist_px,
             "window_overlap": overlap,
-            "max_velocity_vx_vy_m_s": [float(vx_max), float(vy_max)],
-            "outlier_filter_mode": str(_per_pass(cfg.OUTLIER_FILTER_MODE, pass_i)).strip().lower(),
-            "neighbourhood_size": list(n_nbs),
-            "neighbourhood_threshold": thr,
-            "time_smoothing_lambda": lam,
+            "max_velocity_vy_vx_m_s": [float(vy_max_m_s), float(vx_max_m_s)],
+            "max_velocity_vx_vy_m_s": [float(vx_max_m_s), float(vy_max_m_s)],
+            "outlier_filter_mode": str(_per_pass(cfg.OUTLIER_FILTER_MODE, pass_idx0)).strip().lower(),
+            "neighbourhood_size": list(nb_size_tyx),
+            "neighbourhood_threshold": nb_thr,
+            "time_smoothing_lambda": time_smooth_lam,
             "files": {
                 "pairs": "../pairs.csv",
                 "unfiltered": paths.peaks_csv_gz.name,
@@ -291,23 +295,24 @@ def run(
             )
             _, _, _, disp_final = load_postprocessed_csv(
                 paths.post_csv,
-                n_pairs=n_pairs,
-                n_wy=n_wy,
-                n_wx=n_wx,
+                n_pairs=n_img_pairs,
+                n_wy=n_win_y,
+                n_wx=n_win_x,
             )
             if plot_windows:
                 shifts = None
-                if pass_i > 0 and prev_disp_final is not None:
-                    shifts = piv.disp2shift((n_wy, n_wx), prev_disp_final)
+                if pass_idx0 > 0 and prev_disp_final is not None:
+                    shifts = piv.disp2shift(
+                        (n_win_y, n_win_x), prev_disp_final)
                 window_layouts.append({
-                    "pass": pass_1b,
-                    "n_wins": (n_wy, n_wx),
+                    "pass": pass_idx1,
+                    "n_wins": (n_win_y, n_win_x),
                     "overlap": overlap,
                     "shifts": shifts,
                 })
 
-            if pass_i == cfg.NR_PASSES - 1:
-                final_disp_final = disp_final
+            if pass_idx0 == cfg.NR_PASSES - 1:
+                disp_final_lastpass = disp_final
                 # Best-effort load of interpolation mask (if previously saved).
                 mask_csv = run_dir / "interpolated_mask.csv"
                 if mask_csv.exists():
@@ -315,13 +320,13 @@ def run(
                         mask_rows = np.loadtxt(
                             mask_csv, delimiter=",", skiprows=1)
                         if mask_rows.ndim == 1 and mask_rows.size == 0:
-                            final_interp_mask = None
+                            interp_filled_mask = None
                         else:
                             mask_flat = mask_rows[:, 3].astype(bool)
-                            final_interp_mask = mask_flat.reshape(
-                                n_pairs, n_wy, n_wx)
+                            interp_filled_mask = mask_flat.reshape(
+                                n_img_pairs, n_win_y, n_win_x)
                     except Exception:
-                        final_interp_mask = None
+                        interp_filled_mask = None
             prev_disp_final = disp_final
             continue
 
@@ -331,12 +336,12 @@ def run(
             print(
                 f"Found unfiltered checkpoint: {paths.peaks_csv_gz.name} -> skipping correlation + peak finding"
             )
-            disp_unf, int_unf = load_unfiltered_peaks_csv_gz(
+            disp_peaks_unf, peak_int_unf = load_unfiltered_peaks_csv_gz(
                 paths.peaks_csv_gz,
-                n_pairs=n_pairs,
-                n_wy=n_wy,
-                n_wx=n_wx,
-                n_peaks=nr_peaks,
+                n_pairs=n_img_pairs,
+                n_wy=n_win_y,
+                n_wx=n_win_x,
+                n_peaks=n_peaks,
             )
         else:
             # Full computation path: we need images to compute correlations.
@@ -364,44 +369,44 @@ def run(
 
             # Later passes refine the search region by shifting windows based
             # on the previous pass result.
-            if pass_i == 0:
+            if pass_idx0 == 0:
                 shifts = None
             else:
                 if prev_disp_final is None:
                     raise RuntimeError(
-                        f"Pass {pass_1b} needs previous displacement to compute shifts")
+                        f"Pass {pass_idx1} needs previous displacement to compute shifts")
                 print("Computing window shifts from previous pass...")
-                shifts = piv.disp2shift((n_wy, n_wx), prev_disp_final)
+                shifts = piv.disp2shift((n_win_y, n_win_x), prev_disp_final)
 
             # 1) Calculate correlations per pair/window.
             print("Step 1: calculating correlation maps...")
             corrs = piv.calc_corrs(
                 imgs,
-                n_wins=(n_wy, n_wx),
+                n_wins=(n_win_y, n_win_x),
                 shifts=shifts,
                 overlap=overlap,
-                ds_fac=ds_fac,
+                ds_fac=ds_factor,
             )
 
             # 2) Optionally sum correlations over a time window.
             #    This is a denoising/smoothing step in correlation space.
             print(
-                f"Step 2: summing correlation maps (corrs_to_sum={corrs_to_sum})...")
+                f"Step 2: summing correlation maps (corrs_to_sum={n_corrs_to_sum})...")
             corrs_sum = piv.sum_corrs(
                 corrs,
-                corrs_to_sum,
-                n_wins=(n_wy, n_wx),
+                n_corrs_to_sum,
+                n_wins=(n_win_y, n_win_x),
                 shifts=shifts,
             )
 
             if bool(getattr(cfg, "PLOT_CORRELATIONS", False)):
                 plots_dir = run_dir / "plots"
-                corr_dir = plots_dir / "correlations" / f"pass_{pass_1b:02d}"
-                j_mid = int(n_wy) // 2
-                k_mid = int(n_wx) // 2
-                for pair_i in range(n_pairs):
+                corr_dir = plots_dir / "correlations" / f"pass_{pass_idx1:02d}"
+                j_mid = int(n_win_y) // 2
+                k_mid = int(n_win_x) // 2
+                for pair_i in range(n_img_pairs):
                     corr_map, corr_center = corrs_sum[(pair_i, j_mid, k_mid)]
-                    title = f"Pass {pass_1b} pair {pair_i} win ({j_mid},{k_mid})"
+                    title = f"Pass {pass_idx1} pair {pair_i} win ({j_mid},{k_mid})"
                     viz.plot_correlation_map(
                         np.asarray(corr_map),
                         center_yx=(int(corr_center[0]), int(corr_center[1])),
@@ -410,15 +415,15 @@ def run(
                     )
 
             # 3) Find displacement peaks in the correlation planes.
-            print(f"Step 3: finding peaks (nr_peaks={nr_peaks})...")
-            disp_unf, int_unf = piv.find_disps(
+            print(f"Step 3: finding peaks (nr_peaks={n_peaks})...")
+            disp_peaks_unf, peak_int_unf = piv.find_disps(
                 corrs_sum,
-                n_wins=(n_wy, n_wx),
+                n_wins=(n_win_y, n_win_x),
                 shifts=shifts,
-                n_peaks=nr_peaks,
-                ds_fac=ds_fac,
-                min_dist=min_peak_dist,
-                subpx=pass_i == cfg.NR_PASSES - 1,
+                n_peaks=n_peaks,
+                ds_fac=ds_factor,
+                min_dist=min_peak_dist_px,
+                subpx=pass_idx0 == cfg.NR_PASSES - 1,
             )
 
             # Window positions (for plotting/interpretation) are derived from
@@ -427,29 +432,33 @@ def run(
             print(f"Writing unfiltered checkpoint: {paths.peaks_csv_gz.name}")
             write_unfiltered_peaks_csv_gz(
                 paths.peaks_csv_gz,
-                disp_unf=disp_unf,
-                int_unf=int_unf,
+                disp_unf=disp_peaks_unf,
+                int_unf=peak_int_unf,
             )
 
         # Stage 2: postprocess the multi-peak results into a usable single-peak
         # displacement field, applying outlier and neighbour filtering.
         print("Postprocessing: outlier + neighbour filtering")
-        a_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
-        b_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
-        a_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
-        b_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
+        a_y = float(vy_max_m_s) * float(cfg.TIMESTEP_S) / \
+            float(cfg.SCALE_M_PER_PX)
+        b_x = float(vx_max_m_s) * float(cfg.TIMESTEP_S) / \
+            float(cfg.SCALE_M_PER_PX)
+        a_x = float(vx_max_m_s) * float(cfg.TIMESTEP_S) / \
+            float(cfg.SCALE_M_PER_PX)
+        b_y = float(vy_max_m_s) * float(cfg.TIMESTEP_S) / \
+            float(cfg.SCALE_M_PER_PX)
 
-        if pass_i == 0:
+        if pass_idx0 == 0:
             nb_mode: str = "xy"
             nb_replace: bool | str = False
             nb_thr_unit = "std"
-        elif pass_i == 1:
+        elif pass_idx0 == 1:
             nb_mode = "r"
             nb_replace = True
             nb_thr_unit = "std"
         else:
             nb_mode = "xy"
-            if isinstance(thr, tuple):
+            if isinstance(nb_thr, tuple):
                 nb_replace = "closest"
                 nb_thr_unit = "pxs"
             else:
@@ -457,7 +466,7 @@ def run(
                 nb_thr_unit = "std"
 
         outlier_mode = str(
-            _per_pass(cfg.OUTLIER_FILTER_MODE, pass_i)).strip().lower()
+            _per_pass(cfg.OUTLIER_FILTER_MODE, pass_idx0)).strip().lower()
         flow_dir = str(cfg.FLOW_DIRECTION).strip().lower()
         if flow_dir not in {"x", "y"}:
             raise ValueError("cfg.FLOW_DIRECTION must be 'x' or 'y'")
@@ -474,26 +483,26 @@ def run(
             if flow_dir == "x":
                 a_px: float | np.ndarray = a_y
                 b_px: float | None = b_x
-                disp_for_filter = disp_unf
+                disp_for_filter = disp_peaks_unf
                 unswap: bool = False
             else:  # flow_dir == "y"
                 a_px = a_x
                 b_px = b_y
-                disp_for_filter = disp_unf[..., [1, 0]]
+                disp_for_filter = disp_peaks_unf[..., [1, 0]]
                 unswap = True
         elif outlier_mode == "circle":
             # Use the larger of the two maxima as the circle radius.
-            vmax = float(max(abs(vx_max), abs(vy_max)))
+            vmax = float(max(abs(vx_max_m_s), abs(vy_max_m_s)))
             a_px = vmax * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
             b_px = None
-            disp_for_filter = disp_unf
+            disp_for_filter = disp_peaks_unf
             unswap = False
         else:
             raise ValueError(
                 "cfg.OUTLIER_FILTER_MODE must be 'semicircle_rect' or 'circle'"
             )
 
-        disp_glo_5d = np.asarray(
+        disp_global_5d = np.asarray(
             piv.filter_outliers(
                 outlier_mode,
                 disp_for_filter,
@@ -503,104 +512,108 @@ def run(
             )
         )
         if unswap:
-            disp_glo_5d = disp_glo_5d[..., [1, 0]]
+            disp_global_5d = disp_global_5d[..., [1, 0]]
 
-        if len(n_nbs) != 3:
+        if len(nb_size_tyx) != 3:
             raise ValueError(
-                f"neighbourhood_size must have 3 elements, got {n_nbs}")
+                f"neighbourhood_size must have 3 elements, got {nb_size_tyx}")
 
-        if interp_n_nbs is not None and len(interp_n_nbs) != 3:
+        if interp_nb_size_tyx is not None and len(interp_nb_size_tyx) != 3:
             raise ValueError(
-                f"interpolation_neighbourhood must have 3 elements, got {interp_n_nbs}")
+                f"interpolation_neighbourhood must have 3 elements, got {interp_nb_size_tyx}")
 
         if nb_replace == "closest":
             print(
                 f"  neighbour_filter: mode={nb_mode} thr_unit={nb_thr_unit} replace={nb_replace}"
             )
-            disp_nbs_5d = piv.filter_neighbours(
-                disp_glo_5d,
-                thr=thr,  # type: ignore[arg-type]
+            disp_nb_5d = piv.filter_neighbours(
+                disp_global_5d,
+                thr=nb_thr,  # type: ignore[arg-type]
                 thr_unit=nb_thr_unit,
-                n_nbs=n_nbs,
+                n_nbs=nb_size_tyx,
                 mode=nb_mode,
                 replace=nb_replace,
                 verbose=True,
                 timing=True,
             )
 
-            disp_glo = piv.strip_peaks(
-                disp_glo_5d, axis=-2, mode="reduce", verbose=False
+            disp_global = piv.strip_peaks(
+                disp_global_5d, axis=-2, mode="reduce", verbose=False
             )
-            disp_nbs = piv.strip_peaks(
-                disp_nbs_5d, axis=-2, mode="reduce", verbose=True
+            disp_nb = piv.strip_peaks(
+                disp_nb_5d, axis=-2, mode="reduce", verbose=True
             )
-            disp_final = disp_nbs
+            disp_final = disp_nb
         else:
             print(
                 f"  neighbour_filter: mode={nb_mode} thr_unit={nb_thr_unit} replace={nb_replace}"
             )
-            disp_glo = piv.strip_peaks(
-                disp_glo_5d, axis=-2, mode="reduce", verbose=True
+            disp_global = piv.strip_peaks(
+                disp_global_5d, axis=-2, mode="reduce", verbose=True
             )
-            disp_nbs = piv.filter_neighbours(
-                disp_glo,
-                thr=thr,  # type: ignore[arg-type]
-                n_nbs=n_nbs,
+            disp_nb = piv.filter_neighbours(
+                disp_global,
+                thr=nb_thr,  # type: ignore[arg-type]
+                n_nbs=nb_size_tyx,
                 mode=nb_mode,
                 replace=nb_replace,
                 verbose=True,
                 timing=True,
             )
-            disp_final = disp_nbs
+            disp_final = disp_nb
 
-        if lam and lam > 0:
+        if time_smooth_lam and time_smooth_lam > 0:
             if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
-                print(f"  temporal_smoothing: enabled (lambda={lam})")
-                disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
+                print(
+                    f"  temporal_smoothing: enabled (lambda={time_smooth_lam})"
+                )
+                disp_final = piv.smooth(
+                    time_s, disp_final, lam=time_smooth_lam, type=int)
 
         # Final pass: patch remaining NaN holes by interpolation
         if (
-            pass_i == cfg.NR_PASSES - 1
-            and interp_n_nbs is not None
-            and any(v > 1 for v in interp_n_nbs)
+            pass_idx0 == cfg.NR_PASSES - 1
+            and interp_nb_size_tyx is not None
+            and any(v > 1 for v in interp_nb_size_tyx)
             and np.isnan(disp_final).any()
         ):
             print(
-                f"  interpolation: patching NaN holes (n_nbs={interp_n_nbs})")
+                f"  interpolation: patching NaN holes (n_nbs={interp_nb_size_tyx})"
+            )
             disp_pre_interp = disp_final
             nan_mask = np.any(np.isnan(disp_pre_interp), axis=-1)
 
             disp_patched = piv.filter_neighbours(
                 disp_pre_interp,
                 thr=None,
-                n_nbs=interp_n_nbs,
+                n_nbs=interp_nb_size_tyx,
                 mode="xy",
                 replace="interp",
                 verbose=True,
                 timing=True,
             )
             filled_mask = nan_mask & (~np.any(np.isnan(disp_patched), axis=-1))
-            final_interp_mask = filled_mask
+            interp_filled_mask = filled_mask
             disp_final = disp_patched
 
         if plot_windows:
             window_layouts.append({
-                "pass": pass_1b,
-                "n_wins": (n_wy, n_wx),
+                "pass": pass_idx1,
+                "n_wins": (n_win_y, n_win_x),
                 "overlap": overlap,
                 "shifts": shifts,
             })
 
-        if pass_i == cfg.NR_PASSES - 1:
-            final_disp_final = disp_final
+        if pass_idx0 == cfg.NR_PASSES - 1:
+            disp_final_lastpass = disp_final
 
         # Persist stage-2 checkpoint.
         print(f"Writing postprocessed checkpoint: {paths.post_csv.name}")
         write_postprocessed_csv(
             paths.post_csv,
             time_s=time_s,
-            disp_glo=disp_glo,
-            disp_nbs=disp_nbs,
+            disp_glo=disp_global,
+            disp_nbs=disp_nb,
             disp_final=disp_final,
         )
 
@@ -612,9 +625,9 @@ def run(
         write_meta_json(paths.meta_json, meta)
         prev_disp_final = disp_final
 
-    if final_disp_final is not None:
+    if disp_final_lastpass is not None:
         print("\nFinal exports: velocity + flow rate")
-        vel_final = final_disp_final * \
+        vel_final = disp_final_lastpass * \
             float(cfg.SCALE_M_PER_PX) / float(cfg.TIMESTEP_S)
         flow_m3s = piv.vel2flow(
             vel_final,
@@ -649,10 +662,10 @@ def run(
             comments="",
         )
 
-        if final_interp_mask is not None:
+        if interp_filled_mask is not None:
             interp_csv = run_dir / "interpolated_mask.csv"
             print(f"Writing: {interp_csv.name}")
-            interp_flat = final_interp_mask.reshape(-1).astype(np.int64)
+            interp_flat = interp_filled_mask.reshape(-1).astype(np.int64)
             np.savetxt(
                 interp_csv,
                 np.column_stack([
@@ -680,10 +693,10 @@ def run(
         )
 
         plots_dir = run_dir / "plots"
-        if cfg.PLOT_GLOBAL_FILTERS and filter_ranges:
+        if cfg.PLOT_GLOBAL_FILTERS and filter_ranges_vx_vy:
             print("Plotting: filter_ranges.png")
             viz.plot_filter_ranges(
-                filter_ranges,
+                filter_ranges_vx_vy,
                 mode=cfg.OUTLIER_FILTER_MODE,
                 flow_direction=str(cfg.FLOW_DIRECTION),
                 output_path=plots_dir / "filter_ranges.png",
@@ -730,7 +743,7 @@ def run(
             ds_fac_final = int(_per_pass(cfg.DOWNSAMPLE_FACTOR, final_pass_i))
             viz.export_velocity_profiles_pdf(
                 vel_final=vel_final,
-                interpolated_mask=final_interp_mask,
+                interpolated_mask=interp_filled_mask,
                 image=image_for_plots,
                 n_wins=(int(n_wins_final[0]), int(n_wins_final[1])),
                 overlap=overlap_final,
