@@ -222,6 +222,7 @@ def run(
             "min_peak_distance": min_peak_dist,
             "window_overlap": overlap,
             "max_velocity_vx_vy_m_s": [float(vx_max), float(vy_max)],
+            "outlier_filter_mode": str(_per_pass(cfg.OUTLIER_FILTER_MODE, pass_i)).strip().lower(),
             "neighbourhood_size": list(n_nbs),
             "neighbourhood_threshold": thr,
             "time_smoothing_lambda": lam,
@@ -362,7 +363,8 @@ def run(
                 nb_replace = True
                 nb_thr_unit = "std"
 
-        outlier_mode = str(cfg.OUTLIER_FILTER_MODE).strip().lower()
+        outlier_mode = str(
+            _per_pass(cfg.OUTLIER_FILTER_MODE, pass_i)).strip().lower()
         flow_dir = str(cfg.FLOW_DIRECTION).strip().lower()
         if flow_dir not in {"x", "y"}:
             raise ValueError("cfg.FLOW_DIRECTION must be 'x' or 'y'")
@@ -527,7 +529,7 @@ def run(
         if cfg.PLOT_GLOBAL_FILTERS and filter_ranges:
             viz.plot_filter_ranges(
                 filter_ranges,
-                mode=str(cfg.OUTLIER_FILTER_MODE),
+                mode=cfg.OUTLIER_FILTER_MODE,
                 flow_direction=str(cfg.FLOW_DIRECTION),
                 output_path=plots_dir / "filter_ranges.png",
             )

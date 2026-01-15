@@ -21,7 +21,7 @@ from tcm_piv.preprocessing import split_n_shift
 def plot_filter_ranges(
     ranges: list[tuple[float, float]],
     *,
-    mode: str = "semicircle_rect",
+    mode: str | list[str] = "semicircle_rect",
     flow_direction: str = "x",
     output_path: Path | None = None,
 ) -> tuple[Figure, Axes]:
@@ -29,13 +29,30 @@ def plot_filter_ranges(
     ax.axhline(0.0, color="0.7", linewidth=1.0)
     ax.axvline(0.0, color="0.7", linewidth=1.0)
 
-    mode_norm = str(mode).strip().lower()
+    if isinstance(mode, list):
+        if len(mode) == 1 and ranges:
+            mode_list = [str(mode[0]).strip().lower() for _ in ranges]
+        elif len(mode) != len(ranges):
+            raise ValueError(
+                "mode must be a string or a list with length 1 or matching len(ranges)"
+            )
+        else:
+            mode_list = [str(m).strip().lower() for m in mode]
+    else:
+        mode_list = [str(mode).strip().lower() for _ in ranges]
+
+    mode_norm = mode_list[0] if mode_list else str(mode).strip().lower()
     flow_dir = str(flow_direction).strip().lower()
     if flow_dir not in {"x", "y"}:
         raise ValueError("flow_direction must be 'x' or 'y'")
 
+    modes_unique = sorted(set(mode_list))
+    title_mode = modes_unique[0] if len(modes_unique) == 1 else "mixed"
+
     for idx, (vx, vy) in enumerate(ranges, start=1):
-        if mode_norm == "semicircle_rect":
+        pass_mode = mode_list[idx - 1] if idx - \
+            1 < len(mode_list) else mode_norm
+        if pass_mode == "semicircle_rect":
             # Matches `filter_outliers('semicircle_rect', ...)`:
             # left half: circle of radius a (= vy) for vx < 0
             # right half: rectangle with vx in [0, b] (= vx) and vy in [-a, a]
@@ -87,7 +104,7 @@ def plot_filter_ranges(
                         linewidth=1.5,
                     )
                 )
-        elif mode_norm == "circle":
+        elif pass_mode == "circle":
             r = float(max(abs(vx), abs(vy)))
             ax.add_patch(
                 Circle(
@@ -119,7 +136,7 @@ def plot_filter_ranges(
 
     ax.set_xlabel("v_x limit (m/s)")
     ax.set_ylabel("v_y limit (m/s)")
-    ax.set_title(f"Global filter ranges ({mode_norm}, flow={flow_dir})")
+    ax.set_title(f"Global filter ranges ({title_mode}, flow={flow_dir})")
     ax.legend(loc="upper right")
     ax.grid(True, linestyle="--", alpha=0.5)
     ax.set_aspect("equal")

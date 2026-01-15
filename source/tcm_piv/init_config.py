@@ -81,7 +81,6 @@ NR_PASSES: int
 
 # [source]
 FRAMES_TO_USE: str | list[int]
-EXTRA_VEL_DIM_M: float
 
 # [preprocessing]
 DOWNSAMPLE_FACTOR: list[int] | int
@@ -103,7 +102,9 @@ NEIGHBOURHOOD_SIZE: list[tuple[int, int, int]] | tuple[int, int, int]
 NEIGHBOURHOOD_THRESHOLD: list[int | tuple[int, int]] | int | tuple[int, int]
 TIME_SMOOTHING_LAMBDA: list[float] | float
 FLOW_DIRECTION: str
-OUTLIER_FILTER_MODE: str
+EXTRA_VEL_DIM_M: float
+OUTLIER_FILTER_MODE: list[str] | str
+
 
 # [visualisation]
 PLOT_MODEL: bool
@@ -156,7 +157,7 @@ def read_file(config_file: Path | str | None) -> None:
     visualisation = merged["visualisation"]
 
     # [source]
-    global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, NR_IMAGES, EXTRA_VEL_DIM_M
+    global IMAGE_DIR, OUTPUT_DIR, FRAMES_TO_USE, IMAGE_LIST, NR_IMAGES
     IMAGE_DIR = str(source["image_dir"])
     OUTPUT_DIR = str(source["output_dir"])
     FRAMES_TO_USE = source["frames_to_use"]
@@ -183,9 +184,6 @@ def read_file(config_file: Path | str | None) -> None:
             "At least 2 images are required for PIV analysis."
         )
     print(f"Number of images to process: {NR_IMAGES}")
-
-    # formerly called "depth"
-    EXTRA_VEL_DIM_M = float(source["extra_vel_dim_m"])
 
     # [camera]
     global CAMERA_DIR, CALIB_DIR, CALIB_SPACING_MM, TIMESTAMP, FRAMERATE_HZ, TIMESTEP_S, SHUTTERSPEED_NS, IMAGE_WIDTH_PX, IMAGE_HEIGHT_PX, IMAGE_WIDTH_M, IMAGE_HEIGHT_M, SCALE_M_PER_PX
@@ -229,7 +227,7 @@ def read_file(config_file: Path | str | None) -> None:
 
     # [preprocessing]
     global DOWNSAMPLE_FACTOR, BACKGROUND_DIR, CROP_ROI
-    DOWNSAMPLE_FACTOR = _normalize_per_pass(
+    DOWNSAMPLE_FACTOR = _per_pass(
         preprocessing["downsample_factor"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
@@ -251,18 +249,18 @@ def read_file(config_file: Path | str | None) -> None:
 
     # [correlation]
     global CORRS_TO_SUM, NR_WINDOWS, WINDOW_OVERLAP
-    CORRS_TO_SUM = _normalize_per_pass(
+    CORRS_TO_SUM = _per_pass(
         correlation["corrs_to_sum"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
-    NR_WINDOWS = _normalize_per_pass(
+    NR_WINDOWS = _per_pass(
         correlation["nr_windows"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_int_tuple(v, length=2),
         tuple_len=2,
     )
-    WINDOW_OVERLAP = _normalize_per_pass(
+    WINDOW_OVERLAP = _per_pass(
         correlation["window_overlap"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: float(v),
@@ -270,26 +268,26 @@ def read_file(config_file: Path | str | None) -> None:
 
     # [displacement]
     global NR_PEAKS, MIN_PEAK_DISTANCE
-    NR_PEAKS = _normalize_per_pass(
+    NR_PEAKS = _per_pass(
         displacement["nr_peaks"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
-    MIN_PEAK_DISTANCE = _normalize_per_pass(
+    MIN_PEAK_DISTANCE = _per_pass(
         displacement["min_peak_distance"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: int(v),
     )
 
     # [postprocessing]
-    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, OUTLIER_FILTER_MODE
-    MAX_VELOCITY = _normalize_per_pass(
+    global MAX_VELOCITY, NEIGHBOURHOOD_SIZE, NEIGHBOURHOOD_THRESHOLD, TIME_SMOOTHING_LAMBDA, FLOW_DIRECTION, EXTRA_VEL_DIM_M, OUTLIER_FILTER_MODE
+    MAX_VELOCITY = _per_pass(
         postprocessing["max_velocity"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_float_tuple(v, length=2),
         tuple_len=2,
     )
-    NEIGHBOURHOOD_SIZE = _normalize_per_pass(
+    NEIGHBOURHOOD_SIZE = _per_pass(
         postprocessing["neighbourhood_size"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: _as_int_tuple(v, length=3),
@@ -314,28 +312,36 @@ def read_file(config_file: Path | str | None) -> None:
         NEIGHBOURHOOD_THRESHOLD = [_parse_threshold(
             thr_value) for _ in range(NR_PASSES)]
     else:
-        NEIGHBOURHOOD_THRESHOLD = _normalize_per_pass(
+        NEIGHBOURHOOD_THRESHOLD = _per_pass(
             thr_value,
             nr_passes=NR_PASSES,
             element_parser=_parse_threshold,
         )
 
-    TIME_SMOOTHING_LAMBDA = _normalize_per_pass(
+    TIME_SMOOTHING_LAMBDA = _per_pass(
         postprocessing["time_smoothing_lambda"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: float(v),
     )
 
-    OUTLIER_FILTER_MODE = str(
-        postprocessing["outlier_filter_mode"]).strip().lower()
-    if OUTLIER_FILTER_MODE not in {"semicircle_rect", "circle"}:
-        raise ValueError(
-            "postprocessing.outlier_filter_mode must be 'semicircle_rect' or 'circle'"
-        )
+    OUTLIER_FILTER_MODE = _per_pass(
+        postprocessing["outlier_filter_mode"],
+        nr_passes=NR_PASSES,
+        element_parser=lambda v: str(v).strip().lower(),
+    )
+    allowed_outlier_modes = {"semicircle_rect", "circle"}
+    for mode in OUTLIER_FILTER_MODE:
+        if mode not in allowed_outlier_modes:
+            raise ValueError(
+                "postprocessing.outlier_filter_mode must be 'semicircle_rect' or 'circle' (scalar or per-pass array)"
+            )
 
     FLOW_DIRECTION = str(postprocessing["flow_direction"]).strip().lower()
     if FLOW_DIRECTION not in {"x", "y"}:
         raise ValueError("postprocessing.flow_direction must be 'x' or 'y'")
+
+    # formerly called "depth"
+    EXTRA_VEL_DIM_M = float(source["extra_vel_dim_m"])
 
     # [visualisation]
     global PLOT_MODEL, MODEL_GENDER, MODEL_MASS, MODEL_HEIGHT
@@ -350,7 +356,7 @@ def read_file(config_file: Path | str | None) -> None:
     EXPORT_VELOCITY_PROFILES_PDF = bool(
         visualisation["export_velocity_profiles_pdf"]
     )
-    WINDOW_PLOT_ENABLED = _normalize_per_pass(
+    WINDOW_PLOT_ENABLED = _per_pass(
         visualisation["plot_window_layout"],
         nr_passes=NR_PASSES,
         element_parser=lambda v: bool(v),
@@ -570,7 +576,7 @@ def _as_float_tuple(value: Any, *, length: int) -> tuple[float, ...]:
         raise ValueError(f"Expected float array of length {length}") from exc
 
 
-def _normalize_per_pass(
+def _per_pass(
     value: Any,
     *,
     nr_passes: int,

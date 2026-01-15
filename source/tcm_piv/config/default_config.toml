@@ -1,10 +1,5 @@
 # Default configuration for tcm-piv
-#
-# Notes:
-# - This file is packaged with the library and provides fallbacks.
-# - User configs override these values.
-# - Per-pass parameters may be a scalar (broadcast) or a list of length `nr_passes`.
-#
+
 # Maintenance:
 # - Treat this file as the single source of truth for defaults.
 #   The Python loader merges user config over these defaults and should not
@@ -14,61 +9,83 @@
 # - For “tuple-like” values, use arrays like `[w, h]`; for per-pass tuple values,
 #   use arrays-of-arrays like `[[w, h], [w2, h2], ...]`.
 
+# Notes:
+# - This file is packaged with the library and provides fallbacks.
+# - User configs override these values.
+# - Per-pass parameters (marked with *) may be a scalar (which will be broadcast)
+#   or a list of length `nr_passes`.
+# - All "dir" parameters can be left empty "" to provide user with file picker.
+
+# How many times we refine the window size
 nr_passes = 1
 
 [source]
+# (Relative) path to the directory containing your .tif high-speed images
 image_dir = ""
+# (Relative) path to the directory where all processed data and results will be saved
 output_dir = ""
-frames_to_use = "all"  # "all" or array of ints
-extra_vel_dim_m = 0.01
+# A list of frames (ints) to use or the word "all"
+frames_to_use = "all"
 
 [camera]
+# (Relative) path to the camera .cihx metadata file, a processed JSON metadata file or the directory containing either
 camera_dir = ""
+# (Relative) path to the calibration .tif image file (circle grid), a processed JSON metadata file or the directory containing either
 calib_dir = ""
+# Spacing between the circles in the circle grid (float in mm)
 calib_spacing_mm = 1.0
 
 [preprocessing]
-# Per-pass
-# downsample_factor = 1
-# downsample_factor = [4, 1, 1]
-downsample_factor = 1
-
-# Empty string means: not provided
+# Background image to subtract. Empty string means: not provided, will ask to generate.
 background_dir = ""
 
-# (y_start, y_end, x_start, x_end)
+# Crop ROI (y_start, y_end, x_start, x_end)
 # y_end/x_end: 0 means full extent; negative means offset from end.
 crop_roi = [0, 0, 0, 0]
 
+# *Sum pixels over squares of size (downsample_factor x downsample_factor)
+downsample_factor = 1      # or [f1, f2, ...]
+
 [correlation]
-# Per-pass
+# *Number of correlation maps (time steps) that will be summed before starting
+# peak detection. Fancy averaging in time, basically.
 corrs_to_sum = 1
-# Number of interrogation windows as [n_y, n_x]
+
+# *Number of interrogation windows as [n_y, n_x]
 nr_windows = [1, 1]        # or [[n_y, n_x], [n_y2, n_x2], ...]
+
+# *Overlap fraction between windows (0 means no overlap)
 window_overlap = 0.0       # 0..1
 
 [displacement]
-# Per-pass
+# *Number of peaks to save (to have multiple candidates to work with)
 nr_peaks = 1
+
+# *Minimum distance between peaks (in pixels)
 min_peak_distance = 5
 
 [postprocessing]
-# Per-pass
-neighbourhood_size = [3, 3, 3]
-
-# Global outlier filter mode passed to `tcm_piv.postprocessing.filter_outliers`.
-# Allowed: "semicircle_rect", "circle".
+# *Global outlier filter mode: "semicircle_rect" or "circle".
+# May be a scalar (broadcast to all passes) or a per-pass array.
 outlier_filter_mode = "semicircle_rect"
+
+# *Max velocity components [vy, vx] to use for the filter
 max_velocity = [75.0, 10.0]
 
-# Which in-plane velocity component represents the flow direction.
-# Used by the final flow-rate export.
-# Allowed: "x" (use vx) or "y" (use vy).
+# Which in-plane velocity component represents the flow direction: "x" or "y"
 flow_direction = "x"
 
-# Per-pass; element can be int or [thr_y, thr_x]
+# Out of plane dimension channel size (m)
+extra_vel_dim_m = 0.01
+
+# *Size of neighbourhood to consider for local filtering
+# (time, y, x - includes itself as center point)
+neighbourhood_size = [3, 3, 3]
+
+# *How many standard deviations can a displacement be different from its neighbourhood
 neighbourhood_threshold = 1
 
+# *Smoothing parameter (larger = smoother). Works only on single window pass.
 time_smoothing_lambda = 0.0
 
 [visualisation]

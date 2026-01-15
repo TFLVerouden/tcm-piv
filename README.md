@@ -11,10 +11,10 @@ Configuration is TOML-based (Python >= 3.11).
 
 ## Todo
 - range option for frames_to_use
-- is downsample factor 2x2 or 4x4
 - is background implemtned
 - plot correlations option
 - max velocity per 3
 - different modi for different passes
 - write better explanation
 - flow rate nan
+- swap order of peak detection and global filter
