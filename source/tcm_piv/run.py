@@ -114,18 +114,37 @@ def run(
         run_dir (Path): Path to the run directory where results are stored.
     """
 
+    print("\n\nStarting PIV analysis...")
+
     if start_pass_1b < 1:
         raise ValueError("start_pass_1b must be >= 1")
 
     config_path = Path(config_file) if config_file else None
     resume_path = Path(resume_run_dir) if resume_run_dir else None
 
+    if config_path is not None:
+        print(f"Config file: {config_path}")
+    if resume_path is not None:
+        print(f"Resume run dir: {resume_path}")
+    if start_pass_1b != 1:
+        print(f"Start pass (1-based): {start_pass_1b}")
+
+    print("\nReading config...")
     cfg.read_file(config_path)
+
+    print("Config summary:")
+    print(f"  image_dir: {cfg.IMAGE_DIR}")
+    print(f"  nr_images: {cfg.NR_IMAGES}")
+    print(f"  nr_passes: {cfg.NR_PASSES}")
+    print(f"  timestep_s: {cfg.TIMESTEP_S}")
+    print(f"  scale_m_per_px: {cfg.SCALE_M_PER_PX}")
+    print(f"  output_dir: {cfg.OUTPUT_DIR}")
 
     # Each run gets its own directory so results are reproducible and
     # resumable. When resuming, the run folder is provided explicitly.
     run_id = timestamp_str()
     run_dir = resume_path or init_run_dir(Path(cfg.OUTPUT_DIR), run_id)
+    print(f"\nRun directory: {run_dir}")
 
     # Pair mapping for CSV row -> image filenames.
     #
@@ -140,6 +159,7 @@ def run(
         )
         for i in range(cfg.NR_IMAGES - 1)
     ]
+    print(f"Writing pairs.csv ({len(pairs)} pairs)...")
     write_pairs_csv(run_dir / "pairs.csv", pairs)
 
     # Timebase used for plotting / any temporal processing.
@@ -148,6 +168,7 @@ def run(
         frames = cfg.FRAMES_TO_USE
     else:
         frames = list(range(1, cfg.NR_IMAGES + 1))
+    print(f"Timebase: {len(frames)} frames -> {len(frames) - 1} pairs")
     time_s = piv.get_time(frames, float(cfg.TIMESTEP_S))
 
     filter_ranges: list[tuple[float, float]] = []
@@ -179,6 +200,10 @@ def run(
         n_wy, n_wx = int(n_wins[0]), int(n_wins[1])
         n_pairs = len(time_s)
 
+        print(
+            f"\nPASS {pass_1b:02d}/{int(cfg.NR_PASSES):02d}: n_wins=({n_wy},{n_wx})"
+        )
+
         if pass_1b < start_pass_1b:
             if resume_path is None:
                 raise ValueError(
@@ -188,6 +213,9 @@ def run(
                 raise RuntimeError(
                     f"Requested start at pass {start_pass_1b}, but prior pass {pass_1b} has no post file: {paths.post_csv}"
                 )
+            print(
+                f"Skipping pass {pass_1b:02d} (before start_pass). Loading post checkpoint: {paths.post_csv.name}"
+            )
             _, _, _, prev_disp_final = load_postprocessed_csv(
                 paths.post_csv,
                 n_pairs=n_pairs,
@@ -220,6 +248,14 @@ def run(
         min_peak_dist = int(_per_pass(cfg.MIN_PEAK_DISTANCE, pass_i))
         overlap = float(_per_pass(cfg.WINDOW_OVERLAP, pass_i))
 
+        print("Pass parameters:")
+        print(f"  downsample_factor: {ds_fac}")
+        print(f"  corrs_to_sum: {corrs_to_sum}")
+        print(f"  nr_peaks: {nr_peaks}")
+        print(f"  min_peak_distance: {min_peak_dist}")
+        print(f"  window_overlap: {overlap}")
+        print(f"  max_velocity (vx,vy) [m/s]: ({vx_max},{vy_max})")
+
         # Metadata is written once the pass completes.
         # It documents shapes, key config knobs, and the filenames that belong
         # to this pass. This is also the closest thing to a “checkpoint index”.
@@ -250,6 +286,9 @@ def run(
         # the pass is considered complete. We still load it because later
         # passes need `prev_disp_final` to compute their shifts.
         if paths.post_csv.exists():
+            print(
+                f"Found postprocessed checkpoint: {paths.post_csv.name} -> skipping correlation + postprocessing"
+            )
             _, _, _, disp_final = load_postprocessed_csv(
                 paths.post_csv,
                 n_pairs=n_pairs,
@@ -289,6 +328,9 @@ def run(
         # Stage 1 checkpoint: correlation + peak finding already done.
         # This path is intentionally image-free (fast to resume).
         if paths.peaks_csv_gz.exists():
+            print(
+                f"Found unfiltered checkpoint: {paths.peaks_csv_gz.name} -> skipping correlation + peak finding"
+            )
             disp_unf, int_unf = load_unfiltered_peaks_csv_gz(
                 paths.peaks_csv_gz,
                 n_pairs=n_pairs,
@@ -300,13 +342,17 @@ def run(
             # Full computation path: we need images to compute correlations.
             # We load once and reuse across passes.
             if imgs is None:
+                print("Loading images...")
                 imgs = load_images(cfg.IMAGE_LIST, show_progress=True)
                 imgs = np.asarray(imgs)
 
                 if cfg.CROP_ROI != (0, 0, 0, 0):
+                    print(f"Cropping images to ROI: {cfg.CROP_ROI}")
                     imgs = crop(imgs, cfg.CROP_ROI)
 
                 if cfg.BACKGROUND_DIR:
+                    print(
+                        f"Background subtraction using: {cfg.BACKGROUND_DIR}")
                     bg = cv.imread(cfg.BACKGROUND_DIR, cv.IMREAD_GRAYSCALE)
                     if bg is not None:
                         if cfg.CROP_ROI != (0, 0, 0, 0):
@@ -324,9 +370,11 @@ def run(
                 if prev_disp_final is None:
                     raise RuntimeError(
                         f"Pass {pass_1b} needs previous displacement to compute shifts")
+                print("Computing window shifts from previous pass...")
                 shifts = piv.disp2shift((n_wy, n_wx), prev_disp_final)
 
             # 1) Calculate correlations per pair/window.
+            print("Step 1: calculating correlation maps...")
             corrs = piv.calc_corrs(
                 imgs,
                 n_wins=(n_wy, n_wx),
@@ -337,6 +385,8 @@ def run(
 
             # 2) Optionally sum correlations over a time window.
             #    This is a denoising/smoothing step in correlation space.
+            print(
+                f"Step 2: summing correlation maps (corrs_to_sum={corrs_to_sum})...")
             corrs_sum = piv.sum_corrs(
                 corrs,
                 corrs_to_sum,
@@ -360,6 +410,7 @@ def run(
                     )
 
             # 3) Find displacement peaks in the correlation planes.
+            print(f"Step 3: finding peaks (nr_peaks={nr_peaks})...")
             disp_unf, int_unf = piv.find_disps(
                 corrs_sum,
                 n_wins=(n_wy, n_wx),
@@ -373,6 +424,7 @@ def run(
             # Window positions (for plotting/interpretation) are derived from
             # the first image only (geometry only, no time dependence).
             # Persist stage-1 checkpoint.
+            print(f"Writing unfiltered checkpoint: {paths.peaks_csv_gz.name}")
             write_unfiltered_peaks_csv_gz(
                 paths.peaks_csv_gz,
                 disp_unf=disp_unf,
@@ -381,6 +433,7 @@ def run(
 
         # Stage 2: postprocess the multi-peak results into a usable single-peak
         # displacement field, applying outlier and neighbour filtering.
+        print("Postprocessing: outlier + neighbour filtering")
         a_y = float(vy_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
         b_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
         a_x = float(vx_max) * float(cfg.TIMESTEP_S) / float(cfg.SCALE_M_PER_PX)
@@ -408,6 +461,9 @@ def run(
         flow_dir = str(cfg.FLOW_DIRECTION).strip().lower()
         if flow_dir not in {"x", "y"}:
             raise ValueError("cfg.FLOW_DIRECTION must be 'x' or 'y'")
+
+        print(
+            f"  outlier_filter_mode: {outlier_mode} (flow_direction={flow_dir})")
 
         if outlier_mode == "semicircle_rect":
             # `filter_outliers('semicircle_rect')` is asymmetric in the second
@@ -458,6 +514,9 @@ def run(
                 f"interpolation_neighbourhood must have 3 elements, got {interp_n_nbs}")
 
         if nb_replace == "closest":
+            print(
+                f"  neighbour_filter: mode={nb_mode} thr_unit={nb_thr_unit} replace={nb_replace}"
+            )
             disp_nbs_5d = piv.filter_neighbours(
                 disp_glo_5d,
                 thr=thr,  # type: ignore[arg-type]
@@ -477,6 +536,9 @@ def run(
             )
             disp_final = disp_nbs
         else:
+            print(
+                f"  neighbour_filter: mode={nb_mode} thr_unit={nb_thr_unit} replace={nb_replace}"
+            )
             disp_glo = piv.strip_peaks(
                 disp_glo_5d, axis=-2, mode="reduce", verbose=True
             )
@@ -493,6 +555,7 @@ def run(
 
         if lam and lam > 0:
             if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
+                print(f"  temporal_smoothing: enabled (lambda={lam})")
                 disp_final = piv.smooth(time_s, disp_final, lam=lam, type=int)
 
         # Final pass: patch remaining NaN holes by interpolation
@@ -502,6 +565,8 @@ def run(
             and any(v > 1 for v in interp_n_nbs)
             and np.isnan(disp_final).any()
         ):
+            print(
+                f"  interpolation: patching NaN holes (n_nbs={interp_n_nbs})")
             disp_pre_interp = disp_final
             nan_mask = np.any(np.isnan(disp_pre_interp), axis=-1)
 
@@ -530,6 +595,7 @@ def run(
             final_disp_final = disp_final
 
         # Persist stage-2 checkpoint.
+        print(f"Writing postprocessed checkpoint: {paths.post_csv.name}")
         write_postprocessed_csv(
             paths.post_csv,
             time_s=time_s,
@@ -542,10 +608,12 @@ def run(
 
         # Metadata is written last so it can be interpreted as
         # “this pass finished successfully and produced these artifacts”.
+        print(f"Writing pass metadata: {paths.meta_json.name}")
         write_meta_json(paths.meta_json, meta)
         prev_disp_final = disp_final
 
     if final_disp_final is not None:
+        print("\nFinal exports: velocity + flow rate")
         vel_final = final_disp_final * \
             float(cfg.SCALE_M_PER_PX) / float(cfg.TIMESTEP_S)
         flow_m3s = piv.vel2flow(
@@ -565,6 +633,7 @@ def run(
         time_rep = np.repeat(time_s[:n_pairs], n_wy * n_wx)
 
         vel_csv = run_dir / "velocity_final.csv"
+        print(f"Writing: {vel_csv.name}")
         np.savetxt(
             vel_csv,
             np.column_stack([
@@ -582,6 +651,7 @@ def run(
 
         if final_interp_mask is not None:
             interp_csv = run_dir / "interpolated_mask.csv"
+            print(f"Writing: {interp_csv.name}")
             interp_flat = final_interp_mask.reshape(-1).astype(np.int64)
             np.savetxt(
                 interp_csv,
@@ -597,6 +667,7 @@ def run(
             )
 
         flow_csv = run_dir / "flow_rate.csv"
+        print(f"Writing: {flow_csv.name}")
         np.savetxt(
             flow_csv,
             np.column_stack(
@@ -610,6 +681,7 @@ def run(
 
         plots_dir = run_dir / "plots"
         if cfg.PLOT_GLOBAL_FILTERS and filter_ranges:
+            print("Plotting: filter_ranges.png")
             viz.plot_filter_ranges(
                 filter_ranges,
                 mode=cfg.OUTLIER_FILTER_MODE,
@@ -637,6 +709,7 @@ def run(
                         ).astype(image_for_plots.dtype)
 
         if window_layouts and image_for_plots is not None:
+            print("Plotting: window layouts")
             for layout in window_layouts:
                 viz.plot_window_layout(
                     image_for_plots,
@@ -650,6 +723,7 @@ def run(
                 )
 
         if cfg.EXPORT_VELOCITY_PROFILES_PDF and image_for_plots is not None:
+            print("Exporting: velocity_profiles.pdf")
             final_pass_i = int(cfg.NR_PASSES) - 1
             n_wins_final = tuple(_per_pass(cfg.NR_WINDOWS, final_pass_i))
             overlap_final = float(_per_pass(cfg.WINDOW_OVERLAP, final_pass_i))
@@ -668,6 +742,7 @@ def run(
             )
 
         if cfg.PLOT_FLOW_RATE:
+            print("Plotting: flow_rate.png")
             model_tuple: tuple[np.ndarray, np.ndarray] | None = None
             if cfg.PLOT_MODEL:
                 cough = CoughModel.from_gupta(
