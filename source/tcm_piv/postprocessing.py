@@ -392,7 +392,8 @@ def filter_neighbours(coords: np.ndarray, neighbourhood_size: int | str | tuple[
                             if ref.shape[0] > dst.shape[0]:
                                 dst[:] = ref[: dst.shape[0]]
                             else:
-                                dst[:] = np.pad(ref, (0, dst.shape[0] - ref.shape[0]), constant_values=np.nan)
+                                dst[:] = np.pad(
+                                    ref, (0, dst.shape[0] - ref.shape[0]), constant_values=np.nan)
                         else:
                             coords_out[i, j, k, 0, :] = ref
                     continue
