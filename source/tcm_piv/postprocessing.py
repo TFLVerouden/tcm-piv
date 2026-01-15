@@ -5,8 +5,10 @@ This module contains functions for filtering displacement data,
 removing outliers, smoothing data, and other post-processing operations.
 """
 
+import warnings
 import numpy as np
 from scipy.interpolate import griddata, make_smoothing_spline
+from scipy.spatial import QhullError
 from tqdm import trange
 
 
@@ -100,8 +102,22 @@ def _interp_center_from_nb(nb: np.ndarray) -> np.ndarray:
     if coords.shape[0] < 3:
         return fallback
 
-    out0 = griddata(coords, vals0, q2, method="linear")
-    out1 = griddata(coords, vals1, q2, method="linear")
+    try:
+        out0 = griddata(coords, vals0, q2, method="linear")
+        out1 = griddata(coords, vals1, q2, method="linear")
+    except QhullError as e:
+        # Common when the available points are collinear / effectively 1D.
+        warnings.warn(
+            f"Interpolation failed (QhullError); falling back to nearest-neighbour. Details: {e}",
+            RuntimeWarning,
+        )
+        try:
+            out0 = griddata(coords, vals0, q2, method="nearest")
+            out1 = griddata(coords, vals1, q2, method="nearest")
+        except Exception:
+            return fallback
+    except Exception:
+        return fallback
     if out0 is None or out1 is None:
         return fallback
     out = np.array([float(out0[0]), float(out1[0])], dtype=float)
@@ -360,10 +376,25 @@ def filter_neighbours(coords: np.ndarray, neighbourhood_size: int | str | tuple[
                 median = np.nanmedian(neighbourhood, axis=(1, 2, 3))
 
                 # Check for identical neighbourhood (no outliers possible)
-                if np.all(neighbourhood == neighbourhood[0, 0, 0, :]):
+                # NOTE: due to the sliding_window_view usage above, `neighbourhood` has shape
+                # (2, n_t, n_y, n_x), not (n_t, n_y, n_x, 2).
+                ref = neighbourhood[:, 0, 0, 0]
+                if np.all(neighbourhood == ref.reshape(-1, 1, 1, 1)):
                     if replace:
                         # If entire neighbourhood is identical, replace with that value
-                        coords_out[i, j, k, 0, :] = neighbourhood[0, 0, 0, :]
+                        dst = coords_out[i, j, k, 0, :]
+                        if ref.shape != dst.shape:
+                            warnings.warn(
+                                f"filter_neighbours: unexpected shape mismatch in identical-neighbourhood replacement: "
+                                f"ref={ref.shape} dst={dst.shape}. Slicing/padding to fit.",
+                                RuntimeWarning,
+                            )
+                            if ref.shape[0] > dst.shape[0]:
+                                dst[:] = ref[: dst.shape[0]]
+                            else:
+                                dst[:] = np.pad(ref, (0, dst.shape[0] - ref.shape[0]), constant_values=np.nan)
+                        else:
+                            coords_out[i, j, k, 0, :] = ref
                     continue
 
                 # COORDINATE VALIDATION
@@ -389,7 +420,8 @@ def filter_neighbours(coords: np.ndarray, neighbourhood_size: int | str | tuple[
                         else:
                             thr_cur = np.array([threshold, threshold])
                     else:
-                        raise ValueError("threshold_unit must be 'std' or 'pxs'")
+                        raise ValueError(
+                            "threshold_unit must be 'std' or 'pxs'")
                 else:
                     thr_cur = None
 
@@ -587,7 +619,8 @@ def smooth(time: np.ndarray, displacements: np.ndarray, col: str | int = 'both',
     disps_smoothed = disps_smoothed.squeeze(
     ) if disps_smoothed.ndim > 2 else disps_smoothed
     if disps_smoothed.ndim != 2:
-        raise ValueError("displacements must be a 2D array with shape (n_time, 2).")
+        raise ValueError(
+            "displacements must be a 2D array with shape (n_time, 2).")
 
     # Mask any NaN values in the displacements
     mask = ~np.isnan(disps_smoothed).any(axis=1)

@@ -11,5 +11,7 @@ Configuration is TOML-based (Python >= 3.11).
 
 ## Todo
 - range option for frames_to_use
-- flow rate nan
 - swap order of peak detection and global filter?
+- save log files (basically all print statements saved with timestamps?)
+- fix resume run (not working currently)
+- fix weird error in filter_neighbours
