@@ -1,40 +1,43 @@
 nr_passes = 3
 
 [source]
-image_dir = "C:\\PIV Videos\\PIV code test\\1Pyramid"
+image_dir = "C:\\PIV Videos\\PIV code test\\Input"
 output_dir = "C:\\PIV Videos\\PIV code test\\Output"
 frames_to_use = "all"
 extra_vel_dim_m = 0.01
 
 [camera]
-camera_dir = "C:\\PIV Videos\\PIV code test\\Output\\camera_metadata\\test_P-001_20260107_190541_260107_190912_metadata.json"
+camera_dir = ""
 calib_dir = "C:\\Uni\\tcm-piv\\examples\\image_pair\\output\\calibration\\calibration_image_260108_141319_metadata.json"
 calib_spacing_mm = 1.0
 
 [preprocessing]
+# Deze veranderd niks behalve het afschaven van enkele seconden rekenwerk
 downsample_factor = [4, 1, 1]
-background_dir = "C:\\PIV Videos\\PIV code test\\Output\\background_260117_144310.tif"
+background_dir = ""
 crop_roi = [0, 0, 0, 0]
 
 [correlation]
-# [10,10,10] gave best result using 50 frame test set. Crashes on pass 2 with large frame set, set back to [5,5,5]
-corrs_to_sum = [10, 10, 10]
+corrs_to_sum = [1, 1, 1]
 nr_windows = [[1, 1], [1, 8], [1, 24]]
-#not higher than 0.6, otherwise you get more wrong peaks. Going lower than 0.5 also introdices wrong peaks.
-window_overlap = 0.6
+# This one seems best between 0.5 and 0.65
+window_overlap = 0.65
 
 [displacement]
-# Little higher is better, around 10 is good. So you do not miss any peaks.
-nr_peaks = 10
+nr_peaks = 2
 min_peak_distance = 1
 
 [postprocessing]
-neighbourhood_size = [[1, 1, 1],[3, 1, 3],[5, 1, 5]]
+# Deze lijkt niks te veranderen? [1,1,1] -> [3,3,3] -> [3,1,1]
+neighbourhood_size = [1, 1, 1]
 outlier_filter_mode = "semicircle_rect"
-max_velocity = [10, 60]
+# Deze aanpassen na eerst snelheden checken
+max_velocity = [10, 65]
 flow_direction = "y"
+# Doet bijna niks, lijkt wat hoger af en toe beter te verbinden richting de randen, maar niet te hoog (10+)
 neighbourhood_threshold = 5
-time_smoothing_lambda = 0
+# Deze lijkt ook niks te veranderen aan de data, behalve wat kleine piekjes?
+time_smoothing_lambda = 5
 
 [visualisation]
 plot_model = false
