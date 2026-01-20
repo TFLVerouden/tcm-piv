@@ -9,6 +9,13 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
+import matplotlib
+
+# Default to a non-interactive backend to avoid Tk/Tkinter teardown issues
+# when the pipeline uses worker threads. Users can override by setting the
+# MPLBACKEND environment variable (e.g. QtAgg) before importing tcm_piv.
+if os.environ.get("MPLBACKEND") is None:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 

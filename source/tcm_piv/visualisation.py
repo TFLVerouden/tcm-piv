@@ -6,9 +6,17 @@ plots can be generated conditionally based on config flags.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
+import matplotlib
+
+# Default to a non-interactive backend to avoid Tk/Tkinter teardown issues
+# when the pipeline uses worker threads. Users can override by setting the
+# MPLBACKEND environment variable before importing tcm_piv.
+if os.environ.get("MPLBACKEND") is None:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
