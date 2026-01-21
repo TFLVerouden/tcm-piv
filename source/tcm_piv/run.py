@@ -357,6 +357,9 @@ def run(
                     displacements=prev_disp_final,
                 )
 
+                # Replace NaNs (from invalid vectors in prev pass) with 0.0 shift
+                shifts = np.nan_to_num(shifts, nan=0.0)
+
             # 1) Calculate correlations per pair/window.
             print("Step 1: calculating correlation maps...")
             corrs = piv.calc_corrs(
