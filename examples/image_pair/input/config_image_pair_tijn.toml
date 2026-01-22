@@ -1,44 +1,47 @@
 nr_passes = 3
 
 [source]
-image_dir = "examples\\image_pair\\input"
-output_dir = "examples\\image_pair\\output"
+image_dir = "D:\\Split PIV Videos + results\\1Ramp crasht"
+output_dir = "D:\\Output"
 frames_to_use = "all"
 extra_vel_dim_m = 0.01
 
 [camera]
-camera_dir = "C:\\Uni\\tcm-piv\\examples\\image_pair\\input\\test_P-001_20260107_173921_260107_174151_metadata.json"
+camera_dir = "D:\\Split PIV Videos + results\\1Ramp crasht\\test_P-001_20260121_123846_260121_124209_metadata.json"
 calib_dir = "C:\\Uni\\tcm-piv\\examples\\image_pair\\output\\calibration\\calibration_image_260108_141319_metadata.json"
 calib_spacing_mm = 1.0
 
 [preprocessing]
-ds_factor = [4, 1, 1]
-background_dir = ""
+background_dir = "D:\\Output\\background_260122_000504.tif"
 crop_roi = [0, 0, 0, 0]
+ds_factor = [4, 1, 1]
 
 [correlation]
-n_corrs_to_sum = [1, 1, 1]
+n_corrs_to_sum = [10, 10, 10]
 n_windows = [[1, 1], [1, 8], [1, 24]]
-window_overlap = 0.5
+window_overlap = 0.6
 
 [displacement]
 n_peaks = 10
 min_peak_dist_px = 1
 
 [postprocessing]
-nb_size_tyx = [1, 1, 1]
 outlier_filter_mode = "semicircle_rect"
-max_velocity_vy_vx = [200, 10]
+max_velocity_vy_vx = [50, 10]
 flow_direction = "y"
+extra_vel_dim_m = 0.01
+nb_size_tyx = [[9, 1, 1], [7, 1, 3], [9, 1, 3]]
 nb_threshold = 5
 time_smooth_lam = 0
+interp_nb_size_tyx = [[1, 1, 1], [1, 1, 1], [1, 1, 7]]
 
 [visualisation]
-plot_model = true
+plot_model = false
 model_gender = "male"
 model_mass = 70.0
 model_height = 1.93
 plot_global_filters = true
+plot_correlations = false
 plot_window_layout = true
 plot_flow_rate = true
 export_velocity_profiles_pdf = true
