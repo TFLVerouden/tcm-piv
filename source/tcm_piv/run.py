@@ -793,8 +793,28 @@ def _apply_crop_and_background(imgs: np.ndarray, config: Config) -> np.ndarray:
         if bg is None:
             raise RuntimeError(
                 f"Failed to read background image: {config.background_dir}")
+
         if config.crop_roi != (0, 0, 0, 0):
-            bg = crop(bg, config.crop_roi)
+            # Check if bg matches uncropped or cropped size
+            h_in, w_in = imgs.shape[-2:]
+            h_out, w_out = out.shape[-2:]
+            h_bg, w_bg = bg.shape[:2]
+
+            if (h_bg, w_bg) == (h_in, w_in):
+                # Background matches original input -> apply crop
+                bg = crop(bg, config.crop_roi)
+            elif (h_bg, w_bg) == (h_out, w_out):
+                # Background matches output (already cropped?) -> do not crop
+                pass
+            else:
+                # Mismatch - try to guess based on width/height match
+                # If width matches one but not the other, or neither match...
+                # We can't safely proceed without knowing what to do.
+                raise ValueError(
+                    f"Background image shape {bg.shape} does not match input images {imgs.shape[-2:]} "
+                    f"or cropped images {out.shape[-2:]}. Cannot safely subtract background."
+                )
+
         out = np.clip(out.astype(np.int32) - bg.astype(np.int32),
                       0, None).astype(out.dtype)
 
