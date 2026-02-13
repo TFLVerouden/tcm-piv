@@ -145,6 +145,8 @@ def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
 
     y_start, y_end, x_start, x_end = roi
 
+    # TODO: put crop logic in separate function that can be called in init_config to calculate cropped image sizes
+
     # Handle zero indices for y_end and x_end (full extent)
     if y_end == 0:
         y_end = imgs.shape[1]

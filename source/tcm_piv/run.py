@@ -338,9 +338,13 @@ def run(
         else:
             # Step 4b: Load images once (only if we need to compute correlations).
             if imgs is None:
+
                 print("Loading images...")
                 imgs = np.asarray(load_images(
                     config.image_list, show_progress=True))
+
+                # TODO: check if image size matches config.camera metadata
+
                 imgs = _apply_crop_and_background(imgs, config)
 
             # Later passes refine the search region by shifting windows based
@@ -624,6 +628,7 @@ def run(
         print("\nFinal exports: velocity + flow rate")
         vel_final = disp_final_lastpass * \
             float(config.scale_m_per_px) / float(config.timestep_s)
+        # THIS SHOULD USE CROPPED VALUES
         flow_m3s = piv.vel2flow(
             vel_final,
             float(config.extra_vel_dim_m),

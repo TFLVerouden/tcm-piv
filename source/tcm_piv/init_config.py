@@ -167,17 +167,28 @@ def _parse_camera(camera: dict[str, Any], *, output_dir: Path) -> tuple[
     image_width_px = int(camera_meta.get("resolution", {}).get("width"))
     image_height_px = int(camera_meta.get("resolution", {}).get("height"))
 
+# TODO: Get
+    # TODO: calculate these:
+    # image_width_px_crop
+    # image_height_px_crop
+    # image_width_m_crop
+    # image_height_m_crop
+
     calib_metadata = load_metadata(calib_dir)
-    image_width_m = float(
-        calib_metadata.get("calibration", {}).get(
-            "image_size_m", {}).get("width")
-    )
-    image_height_m = float(
-        calib_metadata.get("calibration", {}).get(
-            "image_size_m", {}).get("height")
-    )
+
+    # image_width_m = float(
+    #     calib_metadata.get("calibration", {}).get(
+    #         "image_size_m", {}).get("width")
+    # )
+    # image_height_m = float(
+    #     calib_metadata.get("calibration", {}).get(
+    #         "image_size_m", {}).get("height")
+    # )
     scale_m_per_px = float(calib_metadata.get(
         "calibration", {}).get("scale_m_per_px"))
+
+    image_width_m = scale_m_per_px * image_width_px
+    image_height_m = scale_m_per_px * image_height_px
 
     return (
         calib_spacing_mm,
