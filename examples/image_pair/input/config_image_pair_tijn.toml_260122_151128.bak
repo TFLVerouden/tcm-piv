@@ -1,18 +1,18 @@
 nr_passes = 3
 
 [source]
-image_dir = "D:\\Split PIV Videos + results\\2ContinuousRamp5mlmin"
+image_dir = ""
 output_dir = "D:\\Output"
 frames_to_use = "all"
 extra_vel_dim_m = 0.01
 
 [camera]
-camera_dir = "D:\\Split PIV Videos + results\\1ContinuousRamp5mlmin\\test_P-001_20260122_124745_260122_124934_metadata.json"
+camera_dir = ""
 calib_dir = "C:\\Users\\local2\\Documents\\GitHub\\tcm-piv\\examples\\image_pair\\output\\calibration\\calibration_image_260108_141319_metadata.json"
 calib_spacing_mm = 1.0
 
 [preprocessing]
-background_dir = "D:\\Output\\background_260122_151121.tif"
+background_dir = ""
 crop_roi = [0, 0, 73, -73]
 ds_factor = [4, 1, 1]
 

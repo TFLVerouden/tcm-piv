@@ -121,7 +121,8 @@ def downsample(imgs: np.ndarray, factor: int) -> np.ndarray:
         pad_w = (factor - (width % factor)) % factor
         if pad_h > 0 or pad_w > 0:
             # Pad with 0s (safe for PIV summing)
-            imgs = np.pad(imgs, ((0,0), (0,pad_h), (0,pad_w)), mode='constant')
+            imgs = np.pad(imgs, ((0, 0), (0, pad_h),
+                          (0, pad_w)), mode='constant')
             n_images, height, width = imgs.shape
 
     # Reshape the image into blocks and sum over the blocks
