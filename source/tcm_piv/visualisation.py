@@ -6,9 +6,17 @@ plots can be generated conditionally based on config flags.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
+import matplotlib
+
+# Default to a non-interactive backend to avoid Tk/Tkinter teardown issues
+# when the pipeline uses worker threads. Users can override by setting the
+# MPLBACKEND environment variable before importing tcm_piv.
+if os.environ.get("MPLBACKEND") is None:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -18,10 +26,175 @@ from matplotlib.patches import Circle, Rectangle, Wedge
 from tcm_piv.preprocessing import split_n_shift
 
 
+def _as_temporal_disp_2col(displacements: np.ndarray) -> np.ndarray:
+    """Normalize displacement input to shape (n_time, 2) as (dy_px, dx_px)."""
+
+    disp = np.asarray(displacements)
+    if disp.ndim == 2 and disp.shape[1] == 2:
+        return disp
+    if disp.ndim == 4 and disp.shape[1:3] == (1, 1) and disp.shape[3] == 2:
+        return disp[:, 0, 0, :]
+    raise ValueError(
+        "displacements must be shape (n_time,2) or (n_time,1,1,2) for temporal plotting"
+    )
+
+
+def plot_temporal_displacements(
+    time_s: np.ndarray,
+    disp_raw: np.ndarray,
+    disp_smoothed: np.ndarray,
+    *,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Plot temporal displacements (dy, dx) as raw points + smoothed curve.
+
+    Notes:
+    - Intended for the single-window case (n_windows=(1,1)) where displacements
+      represent a single time-series.
+    - `disp_*` are expected in (dy_px, dx_px) order.
+    """
+
+    t = np.asarray(time_s).reshape(-1)
+    raw_2 = _as_temporal_disp_2col(disp_raw)
+    sm_2 = _as_temporal_disp_2col(disp_smoothed)
+    if raw_2.shape != sm_2.shape:
+        raise ValueError(
+            f"disp_raw and disp_smoothed must have same shape, got {raw_2.shape} vs {sm_2.shape}"
+        )
+    if raw_2.shape[0] != t.size:
+        raise ValueError(
+            f"time_s length must match displacements, got {t.size} vs {raw_2.shape[0]}"
+        )
+
+    t_ms = t * 1000.0
+    fig, (ax_dy, ax_dx) = plt.subplots(
+        nrows=2, ncols=1, figsize=(7.5, 6.0), sharex=True
+    )
+
+    dy_raw, dx_raw = raw_2[:, 0], raw_2[:, 1]
+    dy_sm, dx_sm = sm_2[:, 0], sm_2[:, 1]
+
+    m_dy = ~np.isnan(dy_raw)
+    m_dx = ~np.isnan(dx_raw)
+
+    ax_dy.scatter(
+        t_ms[m_dy],
+        dy_raw[m_dy],
+        s=12,
+        color="0.35",
+        alpha=0.6,
+        label="Raw",
+    )
+    ax_dy.plot(t_ms, dy_sm, color="tab:blue", linewidth=2.0, label="Smoothed")
+    ax_dy.set_ylabel("dy (px)")
+    ax_dy.grid(True, linestyle=":", alpha=0.5)
+    ax_dy.legend(loc="upper right")
+
+    ax_dx.scatter(
+        t_ms[m_dx],
+        dx_raw[m_dx],
+        s=12,
+        color="0.35",
+        alpha=0.6,
+        label="Raw",
+    )
+    ax_dx.plot(t_ms, dx_sm, color="tab:orange",
+               linewidth=2.0, label="Smoothed")
+    ax_dx.set_ylabel("dx (px)")
+    ax_dx.set_xlabel("Time (ms)")
+    ax_dx.grid(True, linestyle=":", alpha=0.5)
+    ax_dx.legend(loc="upper right")
+
+    if title:
+        fig.suptitle(title)
+
+    fig.tight_layout()
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+
+    return fig, (ax_dy, ax_dx)
+
+
+def plot_temporal_displacement_quantiles(
+    time_s: np.ndarray,
+    displacements: np.ndarray,
+    *,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, tuple[Axes, Axes]]:
+    """Plot per-timestamp displacement quantiles across windows.
+
+    This is intended for multi-window passes where each timestamp has many
+    displacement vectors (one per window). The plot shows:
+    - median
+    - 25th percentile (Q1)
+    - 75th percentile (Q3)
+
+    Expected displacement shape: (n_time, n_win_y, n_win_x, 2) with (dy_px, dx_px).
+    """
+
+    t = np.asarray(time_s).reshape(-1)
+    disp = np.asarray(displacements)
+    if disp.ndim != 4 or disp.shape[-1] != 2:
+        raise ValueError(
+            "displacements must be shape (n_time, n_win_y, n_win_x, 2) for quantile plotting"
+        )
+    if disp.shape[0] != t.size:
+        raise ValueError(
+            f"time_s length must match displacements, got {t.size} vs {disp.shape[0]}"
+        )
+
+    n_time, n_wy, n_wx, _ = disp.shape
+    n_windows = int(n_wy) * int(n_wx)
+    disp_flat = disp.reshape(n_time, n_windows, 2)
+
+    dy = disp_flat[:, :, 0]
+    dx = disp_flat[:, :, 1]
+
+    dy_q25, dy_q50, dy_q75 = np.nanpercentile(dy, [25, 50, 75], axis=1)
+    dx_q25, dx_q50, dx_q75 = np.nanpercentile(dx, [25, 50, 75], axis=1)
+
+    t_ms = t * 1000.0
+    fig, (ax_dy, ax_dx) = plt.subplots(
+        nrows=2, ncols=1, figsize=(7.5, 6.0), sharex=True
+    )
+
+    ax_dy.fill_between(t_ms, dy_q25, dy_q75,
+                       color="tab:blue", alpha=0.2, label="Q1–Q3")
+    ax_dy.plot(t_ms, dy_q50, color="tab:blue", linewidth=2.0, label="Median")
+    ax_dy.set_ylabel("dy (px)")
+    ax_dy.grid(True, linestyle=":", alpha=0.5)
+    ax_dy.legend(loc="upper right")
+
+    ax_dx.fill_between(t_ms, dx_q25, dx_q75,
+                       color="tab:orange", alpha=0.2, label="Q1–Q3")
+    ax_dx.plot(t_ms, dx_q50, color="tab:orange", linewidth=2.0, label="Median")
+    ax_dx.set_ylabel("dx (px)")
+    ax_dx.set_xlabel("Time (ms)")
+    ax_dx.grid(True, linestyle=":", alpha=0.5)
+    ax_dx.legend(loc="upper right")
+
+    if title:
+        fig.suptitle(title)
+
+    fig.tight_layout()
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+
+    return fig, (ax_dy, ax_dx)
+
+
 def plot_filter_ranges(
     ranges: list[tuple[float, float]],
     *,
-    mode: str = "semicircle_rect",
+    mode: str | list[str] = "semicircle_rect",
     flow_direction: str = "x",
     output_path: Path | None = None,
 ) -> tuple[Figure, Axes]:
@@ -29,24 +202,41 @@ def plot_filter_ranges(
     ax.axhline(0.0, color="0.7", linewidth=1.0)
     ax.axvline(0.0, color="0.7", linewidth=1.0)
 
-    mode_norm = str(mode).strip().lower()
+    if isinstance(mode, list):
+        if len(mode) == 1 and ranges:
+            mode_list = [str(mode[0]).strip().lower() for _ in ranges]
+        elif len(mode) != len(ranges):
+            raise ValueError(
+                "mode must be a string or a list with length 1 or matching len(ranges)"
+            )
+        else:
+            mode_list = [str(m).strip().lower() for m in mode]
+    else:
+        mode_list = [str(mode).strip().lower() for _ in ranges]
+
+    mode_norm = mode_list[0] if mode_list else str(mode).strip().lower()
     flow_dir = str(flow_direction).strip().lower()
     if flow_dir not in {"x", "y"}:
         raise ValueError("flow_direction must be 'x' or 'y'")
 
+    modes_unique = sorted(set(mode_list))
+    title_mode = modes_unique[0] if len(modes_unique) == 1 else "mixed"
+
     for idx, (vx, vy) in enumerate(ranges, start=1):
-        if mode_norm == "semicircle_rect":
+        pass_mode = mode_list[idx - 1] if idx - \
+            1 < len(mode_list) else mode_norm
+        if pass_mode == "semicircle_rect":
             # Matches `filter_outliers('semicircle_rect', ...)`:
             # left half: circle of radius a (= vy) for vx < 0
             # right half: rectangle with vx in [0, b] (= vx) and vy in [-a, a]
             if flow_dir == "x":
                 # streamwise = vx (x-axis), cross-stream = vy (y-axis)
-                a = float(vy)
-                b = float(vx)
+                cross_limit = float(vy)
+                stream_limit = float(vx)
                 ax.add_patch(
                     Wedge(
                         (0.0, 0.0),
-                        r=a,
+                        r=cross_limit,
                         theta1=90.0,
                         theta2=270.0,
                         fill=False,
@@ -56,21 +246,21 @@ def plot_filter_ranges(
                 )
                 ax.add_patch(
                     Rectangle(
-                        (0.0, -a),
-                        b,
-                        2 * a,
+                        (0.0, -cross_limit),
+                        stream_limit,
+                        2 * cross_limit,
                         fill=False,
                         linewidth=1.5,
                     )
                 )
             else:
                 # streamwise = vy (y-axis), cross-stream = vx (x-axis)
-                a = float(vx)
-                b = float(vy)
+                cross_limit = float(vx)
+                stream_limit = float(vy)
                 ax.add_patch(
                     Wedge(
                         (0.0, 0.0),
-                        r=a,
+                        r=cross_limit,
                         theta1=180.0,
                         theta2=360.0,
                         fill=False,
@@ -80,26 +270,26 @@ def plot_filter_ranges(
                 )
                 ax.add_patch(
                     Rectangle(
-                        (-a, 0.0),
-                        2 * a,
-                        b,
+                        (-cross_limit, 0.0),
+                        2 * cross_limit,
+                        stream_limit,
                         fill=False,
                         linewidth=1.5,
                     )
                 )
-        elif mode_norm == "circle":
-            r = float(max(abs(vx), abs(vy)))
+        elif pass_mode == "circle":
+            radius = float(max(abs(vx), abs(vy)))
             ax.add_patch(
                 Circle(
                     (0.0, 0.0),
-                    radius=r,
+                    radius=radius,
                     fill=False,
                     linewidth=1.5,
                     label=f"Pass {idx}",
                 )
             )
         else:
-            rect = Rectangle(
+            rect_patch = Rectangle(
                 (-vx, -vy),
                 2 * vx,
                 2 * vy,
@@ -107,7 +297,7 @@ def plot_filter_ranges(
                 linewidth=1.5,
                 label=f"Pass {idx}",
             )
-            ax.add_patch(rect)
+            ax.add_patch(rect_patch)
 
     if ranges:
         vx_max = max(abs(vx) for vx, _ in ranges)
@@ -119,7 +309,7 @@ def plot_filter_ranges(
 
     ax.set_xlabel("v_x limit (m/s)")
     ax.set_ylabel("v_y limit (m/s)")
-    ax.set_title(f"Global filter ranges ({mode_norm}, flow={flow_dir})")
+    ax.set_title(f"Global filter ranges ({title_mode}, flow={flow_dir})")
     ax.legend(loc="upper right")
     ax.grid(True, linestyle="--", alpha=0.5)
     ax.set_aspect("equal")
@@ -133,7 +323,7 @@ def plot_filter_ranges(
 
 def plot_window_layout(
     image: np.ndarray,
-    n_wins: tuple[int, int],
+    n_windows: tuple[int, int],
     *,
     overlap: float = 0.0,
     shifts: np.ndarray | None = None,
@@ -161,7 +351,7 @@ def plot_window_layout(
     # `split_n_shift(plot=True)` creates its own figure/axes.
     split_n_shift(
         np.asarray(image),
-        n_wins,
+        n_windows,
         overlap=float(overlap),
         shift=shift_arg,
         shift_mode=shift_mode,
@@ -207,13 +397,57 @@ def plot_flow_rate(
     return fig, ax
 
 
+def plot_correlation_map(
+    corr: np.ndarray,
+    *,
+    center_yx: tuple[int, int] | np.ndarray,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, Axes]:
+    """Plot a single correlation map with a marker at the provided center.
+
+    Args:
+        corr: 2D correlation array.
+        center_yx: (y, x) index of the zero-displacement reference point.
+        title: Optional plot title.
+        output_path: If provided, saves the figure to this path.
+    """
+
+    corr = np.asarray(corr)
+    if corr.ndim != 2:
+        raise ValueError("corr must be a 2D array")
+
+    center_arr = np.asarray(center_yx).reshape(-1)
+    if center_arr.size != 2:
+        raise ValueError("center_yx must have 2 elements (y, x)")
+    cy, cx = int(center_arr[0]), int(center_arr[1])
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    im = ax.imshow(corr, cmap="viridis", origin="upper")
+    ax.plot(cx, cy, marker="+", markersize=14,
+            markeredgewidth=2.0, color="red", alpha=0.5)
+    ax.set_xlabel("x (px)")
+    ax.set_ylabel("y (px)")
+    if title:
+        ax.set_title(title)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+        plt.close(fig)
+
+    return fig, ax
+
+
 def export_velocity_profiles_pdf(
     *,
     vel_final: np.ndarray,
+    interpolated_mask: np.ndarray | None = None,
     image: np.ndarray,
-    n_wins: tuple[int, int],
+    n_windows: tuple[int, int],
     overlap: float,
-    ds_fac: int,
+    ds_factor: int,
     scale_m_per_px: float,
     flow_direction: str,
     time_s: np.ndarray,
@@ -235,10 +469,17 @@ def export_velocity_profiles_pdf(
         raise ValueError("vel_final must have shape (n_pairs, n_y, n_x, 2)")
 
     n_pairs, n_y, n_x, _ = vel_final.shape
-    if (n_y, n_x) != (int(n_wins[0]), int(n_wins[1])):
+    if interpolated_mask is not None:
+        interpolated_mask = np.asarray(interpolated_mask)
+        if interpolated_mask.shape != (n_pairs, n_y, n_x):
+            raise ValueError(
+                "interpolated_mask must have shape (n_pairs, n_y, n_x) matching vel_final"
+            )
+
+    if (n_y, n_x) != (int(n_windows[0]), int(n_windows[1])):
         # Keep it strict so we don't silently plot the wrong geometry.
         raise ValueError(
-            f"n_wins {n_wins} does not match vel_final window grid {(n_y, n_x)}"
+            f"n_windows {n_windows} does not match vel_final window grid {(n_y, n_x)}"
         )
 
     flow_dir = str(flow_direction).strip().lower()
@@ -256,24 +497,25 @@ def export_velocity_profiles_pdf(
 
     # Geometry: compute window centres using the same split_n_shift logic.
     # If ds_fac>1, match correlation's downsampled geometry and scale centres back.
-    img = np.asarray(image)
-    if img.ndim != 2:
+    image_arr = np.asarray(image)
+    if image_arr.ndim != 2:
         raise ValueError("image must be a 2D array")
 
-    ds = int(ds_fac)
-    if ds < 1:
+    downsample_factor = int(ds_factor)
+    if downsample_factor < 1:
         raise ValueError("ds_fac must be >= 1")
 
-    if ds > 1:
+    if downsample_factor > 1:
         # `downsample` expects a stack; this matches `correlation.calc_corrs`.
         from tcm_piv.preprocessing import downsample
 
-        img_ds = downsample(img[np.newaxis, ...], ds)[0]
+        image_downsampled = downsample(
+            image_arr[np.newaxis, ...], downsample_factor)[0]
     else:
-        img_ds = img
+        image_downsampled = image_arr
 
     _, win_pos = split_n_shift(
-        img_ds,
+        image_downsampled,
         (n_y, n_x),
         overlap=float(overlap),
         shift=(0, 0),
@@ -283,27 +525,45 @@ def export_velocity_profiles_pdf(
 
     # Use x-centres for the "distance from centre" axis.
     x_centres_px_ds = win_pos[..., 1]  # (n_y, n_x)
-    x_centres_px = x_centres_px_ds * ds
-    x0_px = img.shape[1] / 2.0
-    dist_m = (x_centres_px - x0_px) * float(scale_m_per_px)
+    x_centres_px = x_centres_px_ds * downsample_factor
+    x_center_px = image_arr.shape[1] / 2.0
+    distances_m = (x_centres_px - x_center_px) * float(scale_m_per_px)
 
     # Collapse y dimension: profile vs x index.
-    dist_profile = np.nanmean(dist_m, axis=0)  # (n_x,)
-    order = np.argsort(dist_profile)
-    dist_profile = dist_profile[order]
+    distance_profile_m = np.nanmean(distances_m, axis=0)  # (n_x,)
+    sort_indices = np.argsort(distance_profile_m)
+    distance_profile_m = distance_profile_m[sort_indices]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output_path) as pdf:
         for pair_i in range(n_pairs):
             stream = np.nanmean(
-                vel_final[pair_i, :, :, stream_idx], axis=0)[order]
+                vel_final[pair_i, :, :, stream_idx], axis=0)[sort_indices]
             cross = np.nanmean(
-                vel_final[pair_i, :, :, cross_idx], axis=0)[order]
+                vel_final[pair_i, :, :, cross_idx], axis=0)[sort_indices]
+
+            interpolated_columns = None
+            if interpolated_mask is not None:
+                # Mark a column if any y-position in that column was interpolated.
+                interpolated_columns = np.any(
+                    interpolated_mask[pair_i, :, :], axis=0)[sort_indices]
 
             fig, ax = plt.subplots(figsize=(6.5, 6.5))
-            ax.plot(stream, dist_profile, "-o",
+            ax.plot(stream, distance_profile_m, "-o",
                     label=stream_label, markersize=3)
-            ax.plot(cross, dist_profile, "-o", label=cross_label, markersize=3)
+            ax.plot(cross, distance_profile_m, "-o",
+                    label=cross_label, markersize=3)
+
+            if interpolated_columns is not None and np.any(interpolated_columns):
+                ax.plot(
+                    stream[interpolated_columns],
+                    distance_profile_m[interpolated_columns],
+                    linestyle="none",
+                    marker="x",
+                    markersize=6,
+                    color="crimson",
+                    label="interpolated",
+                )
 
             ax.set_xlabel("Velocity (m/s)")
             ax.set_ylabel("Distance from centre (m)")

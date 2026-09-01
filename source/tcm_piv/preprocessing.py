@@ -5,26 +5,99 @@ This module contains functions for preparing images for PIV analysis,
 including downsampling and splitting images into interrogation windows.
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
+import matplotlib
+
+# Default to a non-interactive backend to avoid Tk/Tkinter teardown issues
+# when the pipeline uses worker threads. Users can override by setting the
+# MPLBACKEND environment variable (e.g. QtAgg) before importing tcm_piv.
+if os.environ.get("MPLBACKEND") is None:
+    matplotlib.use("Agg")
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 
-def generate_background(imgs: np.ndarray, method: str = 'median') -> np.ndarray:
+def generate_background(
+    imgs: np.ndarray,
+    method: str = "median",
+    *,
+    n_jobs: int | None = None,
+    show_progress: bool = True,
+    chunk_rows: int = 128,
+) -> np.ndarray:
     """Generate a background image from a stack of images.
+
+    This is implemented as a parallel reduction over row-chunks to provide a
+    responsive tqdm progress bar (similar to ``tcm_utils.io_utils.load_images``).
 
     Args:
         imgs (np.ndarray): 3D array of images (image_index, y, x).
         method (str): Method to compute background ('median' or 'mean').
+        n_jobs (int | None): Max workers for ``ThreadPoolExecutor``.
+        show_progress (bool): If True, wrap chunk processing in a tqdm bar.
+        chunk_rows (int): Number of rows per chunk.
 
     Returns:
-        np.ndarray: 2D background image (y, x).
+        np.ndarray: 2D background image (y, x) with dtype matching ``imgs``.
     """
-    if method == 'median':
-        background = np.median(imgs, axis=0)
-    elif method == 'mean':
-        background = np.mean(imgs, axis=0)
-    else:
+
+    if imgs.ndim != 3:
+        raise ValueError("imgs must be a 3D array (image_index, y, x)")
+
+    method_norm = method.strip().lower()
+    if method_norm not in {"median", "mean"}:
         raise ValueError("Method must be 'median' or 'mean'.")
+
+    n_images, height, width = imgs.shape
+    if n_images < 1:
+        raise ValueError("imgs must contain at least one image")
+
+    if chunk_rows < 1:
+        raise ValueError("chunk_rows must be >= 1")
+
+    max_workers = n_jobs or (os.cpu_count() or 4)
+
+    # Pre-allocate output in float for mean/median, then cast back.
+    background = np.empty((height, width), dtype=np.float64)
+
+    # Build row chunks to process independently.
+    row_slices: list[tuple[int, int]] = []
+    for y0 in range(0, height, chunk_rows):
+        y1 = min(height, y0 + chunk_rows)
+        row_slices.append((y0, y1))
+
+    def _compute_chunk(y0: int, y1: int) -> tuple[int, np.ndarray]:
+        slab = imgs[:, y0:y1, :]
+        if method_norm == "median":
+            out = np.median(slab, axis=0)
+        else:
+            out = np.mean(slab, axis=0)
+        return y0, out
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_compute_chunk, y0, y1)
+                   for (y0, y1) in row_slices]
+
+        iterator = as_completed(futures)
+        if show_progress:
+            iterator = tqdm(
+                iterator,
+                total=len(futures),
+                desc="Generating background",
+                leave=False,
+                miniters=1,
+                mininterval=0.1,
+                dynamic_ncols=True,
+            )
+
+        for fut in iterator:
+            y0, out = fut.result()
+            y1 = y0 + out.shape[0]
+            background[y0:y1, :] = out
+
     return background.astype(imgs.dtype)
 
 
@@ -41,13 +114,20 @@ def downsample(imgs: np.ndarray, factor: int) -> np.ndarray:
          """
 
     # Get image stack dimensions, check divisibility
-    n_img, h, w = imgs.shape
-    assert h % factor == 0 and w % factor == 0, \
-        "Image dimensions must be divisible by block_size"
+    n_images, height, width = imgs.shape
+    if height % factor != 0 or width % factor != 0:
+        # Pad right/bottom so it becomes divisible
+        pad_h = (factor - (height % factor)) % factor
+        pad_w = (factor - (width % factor)) % factor
+        if pad_h > 0 or pad_w > 0:
+            # Pad with 0s (safe for PIV summing)
+            imgs = np.pad(imgs, ((0, 0), (0, pad_h),
+                          (0, pad_w)), mode='constant')
+            n_images, height, width = imgs.shape
 
     # Reshape the image into blocks and sum over the blocks
-    return imgs.reshape(n_img, h // factor, factor,
-                        w // factor, factor).sum(axis=(2, 4))
+    return imgs.reshape(n_images, height // factor, factor,
+                        width // factor, factor).sum(axis=(2, 4))
 
 
 def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
@@ -63,6 +143,7 @@ def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
     """
 
     # Check if the input is a 3D array
+    was_2d = False
     if imgs.ndim != 3:
         if imgs.ndim == 2:
             # If it's a 2D image, add a new axis to make it 3D
@@ -78,6 +159,8 @@ def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
             "ROI must be a tuple of four integers (y_start, y_end, x_start, x_end).")
 
     y_start, y_end, x_start, x_end = roi
+
+    # TODO: put crop logic in separate function that can be called in init_config to calculate cropped image sizes
 
     # Handle zero indices for y_end and x_end (full extent)
     if y_end == 0:
@@ -101,14 +184,14 @@ def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
     return imgs[:, y_start:y_end, x_start:x_end] if not was_2d else imgs[0, y_start:y_end, x_start:x_end]
 
 
-def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, shift: tuple[int, int] | np.ndarray = (0, 0), shift_mode: str = 'before', plot: bool = False) -> tuple[np.ndarray, np.ndarray]:
+def split_n_shift(img: np.ndarray, n_windows: tuple[int, int], overlap: float = 0, shift: tuple[int, int] | np.ndarray = (0, 0), shift_mode: str = 'before', plot: bool = False) -> tuple[np.ndarray, np.ndarray]:
     """
     Split a 2D image array (y, x) into (overlapping) windows,
     with automatic window size adjustments for shifted images.
 
     Args:
         img (np.ndarray): 2D array of image values (y, x).
-        n_wins (tuple[int, int]): Number of windows in (y, x) direction.
+        n_windows (tuple[int, int]): Number of windows in (y, x) direction.
         overlap (float): Fractional overlap between windows (0 = no overlap).
         shift (tuple[int, int] | np.ndarray): (dy, dx) shift in pixels - can be (0, 0) for uniform shift
                                               or 3D array (n_y, n_x, 2) for non-uniform shift per window.
@@ -122,7 +205,7 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
     """
     # Get dimensions
     img_h, img_w = img.shape
-    n_y, n_x = n_wins
+    n_y, n_x = n_windows
 
     # Handle both uniform and non-uniform shifts
     shift_array = np.asarray(shift)
@@ -148,10 +231,10 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
     split_img_w = min(int(img_w // n_x * (1 + overlap)), img_w)
 
     # Get the top-left corner of each window to create grid of window positions
-    pos_y_idxs = np.linspace(0, img_h - split_img_h, num=n_y, dtype=int)
-    pos_x_idxs = np.linspace(0, img_w - split_img_w, num=n_x, dtype=int)
+    window_y0_indices = np.linspace(0, img_h - split_img_h, num=n_y, dtype=int)
+    window_x0_indices = np.linspace(0, img_w - split_img_w, num=n_x, dtype=int)
     pos_grid = np.stack(np.meshgrid(
-        pos_y_idxs, pos_x_idxs, indexing="ij"), axis=-1)
+        window_y0_indices, window_x0_indices, indexing="ij"), axis=-1)
 
     # Compute physical centres of windows in image coordinates (for plotting/visualization)
     win_pos = np.stack((pos_grid[:, :, 0] + split_img_h / 2,
@@ -170,9 +253,9 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
     win_w = split_img_w - np.max(np.abs(shift_array[:, :, 1]))
 
     # For each window...
-    wins = np.zeros((n_y, n_x, win_h, win_w), dtype=img.dtype)
-    for i, y in enumerate(pos_y_idxs):
-        for j, x in enumerate(pos_x_idxs):
+    windows = np.zeros((n_y, n_x, win_h, win_w), dtype=img.dtype)
+    for i, y in enumerate(window_y0_indices):
+        for j, x in enumerate(window_x0_indices):
 
             # Get shift for this specific window
             dy, dx = shift_array[i, j]
@@ -229,11 +312,11 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
 
             # Apply padding if needed
             if pad_y_needed > 0 or pad_x_needed > 0:
-                wins[i, j] = np.pad(win_crop, ((pad_y_top, pad_y_bottom),
-                                               (pad_x_left, pad_x_right)),
-                                    mode='constant', constant_values=0)
+                windows[i, j] = np.pad(win_crop, ((pad_y_top, pad_y_bottom),
+                                                  (pad_x_left, pad_x_right)),
+                                       mode='constant', constant_values=0)
             else:
-                wins[i, j] = win_crop
+                windows[i, j] = win_crop
 
             if plot:
                 color = ['orange', 'blue'][(i + j) % 2]
@@ -253,4 +336,4 @@ def split_n_shift(img: np.ndarray, n_wins: tuple[int, int], overlap: float = 0, 
         ax.set(
             title=f"{n_y}x{n_x} windows {shift_mode} shift ({100*overlap:.0f}% ov.)", xlabel='x', ylabel='y')
 
-    return wins, win_pos
+    return windows, win_pos

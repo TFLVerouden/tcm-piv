@@ -10,10 +10,9 @@ Configuration is TOML-based (Python >= 3.11).
 
 
 ## Todo
+- FIX CROPPING -> OUTPUT IMAGE WIDTH/HEIGHT AS METADATA
 - range option for frames_to_use
-- is downsample factor 2x2 or 4x4
-- is background implemtned
-- plot correlations option
-- max velocity per 3
-- different modi for different passes
-- write better explanation
+- swap order of peak detection and global filter?
+- save log files (basically all print statements saved with timestamps?)
+- fix resume run (not working currently)
+- fix weird error in filter_neighbours
