@@ -130,6 +130,54 @@ def downsample(imgs: np.ndarray, factor: int) -> np.ndarray:
                         width // factor, factor).sum(axis=(2, 4))
 
 
+def _normalize_roi(
+    img_shape: tuple[int, int],
+    roi: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Normalize ROI coordinates to image-local bounds.
+
+    The ROI is ordered as (y_start, y_end, x_start, x_end). Zero values on the
+    end coordinates mean "full extent" and negative values are interpreted from
+    the end of the image, matching the cropping behavior used throughout the PIV
+    pipeline.
+    """
+    if len(roi) != 4:
+        raise ValueError(
+            "ROI must be a tuple of four integers (y_start, y_end, x_start, x_end).")
+
+    height, width = img_shape
+    y_start, y_end, x_start, x_end = roi
+
+    if y_start < 0:
+        y_start = height + y_start
+    if x_start < 0:
+        x_start = width + x_start
+    if y_end == 0:
+        y_end = height
+    if x_end == 0:
+        x_end = width
+    if y_end < 0:
+        y_end = height + y_end
+    if x_end < 0:
+        x_end = width + x_end
+
+    if not (0 <= y_start < height and 0 <= y_end <= height and
+            0 <= x_start < width and 0 <= x_end <= width):
+        raise ValueError(
+            "ROI coordinates are out of bounds of the image dimensions.")
+
+    return y_start, y_end, x_start, x_end
+
+
+def get_roi_size(
+    img_shape: tuple[int, int],
+    roi: tuple[int, int, int, int],
+) -> tuple[int, int]:
+    """Return the cropped image dimensions for a given ROI."""
+    y_start, y_end, x_start, x_end = _normalize_roi(img_shape, roi)
+    return y_end - y_start, x_end - x_start
+
+
 def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
     """"
     Crop a single image or a stack of images.
@@ -154,34 +202,13 @@ def crop(imgs: np.ndarray, roi: tuple[int, int, int, int]) -> np.ndarray:
                 "Input must be a 3D array of images (image_index, y, x).")
 
     # Validate ROI dimensions
-    if len(roi) != 4:
-        raise ValueError(
-            "ROI must be a tuple of four integers (y_start, y_end, x_start, x_end).")
+    y_start, y_end, x_start, x_end = _normalize_roi(
+        (imgs.shape[1], imgs.shape[2]),
+        roi,
+    )
 
-    y_start, y_end, x_start, x_end = roi
-
-    # TODO: put crop logic in separate function that can be called in init_config to calculate cropped image sizes
-
-    # Handle zero indices for y_end and x_end (full extent)
-    if y_end == 0:
-        y_end = imgs.shape[1]
-    if x_end == 0:
-        x_end = imgs.shape[2]
-
-    # Handle negative indices for y_end and x_end
-    if y_end < 0:
-        y_end = imgs.shape[1] + y_end
-    if x_end < 0:
-        x_end = imgs.shape[2] + x_end
-
-    # Validate ROI bounds
-    if not (0 <= y_start < imgs.shape[1] and 0 <= y_end <= imgs.shape[1] and
-            0 <= x_start < imgs.shape[2] and 0 <= x_end <= imgs.shape[2]):
-        raise ValueError(
-            "ROI coordinates are out of bounds of the image dimensions.")
-
-    # Crop the images
-    return imgs[:, y_start:y_end, x_start:x_end] if not was_2d else imgs[0, y_start:y_end, x_start:x_end]
+    out = imgs[:, y_start:y_end, x_start:x_end]
+    return out[0] if was_2d else out
 
 
 def split_n_shift(img: np.ndarray, n_windows: tuple[int, int], overlap: float = 0, shift: tuple[int, int] | np.ndarray = (0, 0), shift_mode: str = 'before', plot: bool = False) -> tuple[np.ndarray, np.ndarray]:

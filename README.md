@@ -10,7 +10,6 @@ Configuration is TOML-based (Python >= 3.11).
 
 
 ## Todo
-- FIX CROPPING -> OUTPUT IMAGE WIDTH/HEIGHT AS METADATA
 - range option for frames_to_use
 - swap order of peak detection and global filter?
 - save log files (basically all print statements saved with timestamps?)

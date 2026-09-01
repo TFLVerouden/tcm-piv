@@ -24,7 +24,7 @@ from typing import Any, Callable
 import tifffile
 from natsort import natsorted
 
-from tcm_piv.preprocessing import crop, generate_background
+from tcm_piv.preprocessing import crop, get_roi_size, generate_background
 from tcm_utils.camera_calibration import ensure_calibration
 from tcm_utils.file_dialogs import ask_open_file
 from tcm_utils.io_utils import ensure_path, load_images, load_metadata, prompt_yes_no
@@ -167,23 +167,7 @@ def _parse_camera(camera: dict[str, Any], *, output_dir: Path) -> tuple[
     image_width_px = int(camera_meta.get("resolution", {}).get("width"))
     image_height_px = int(camera_meta.get("resolution", {}).get("height"))
 
-# TODO: Get
-    # TODO: calculate these:
-    # image_width_px_crop
-    # image_height_px_crop
-    # image_width_m_crop
-    # image_height_m_crop
-
     calib_metadata = load_metadata(calib_dir)
-
-    # image_width_m = float(
-    #     calib_metadata.get("calibration", {}).get(
-    #         "image_size_m", {}).get("width")
-    # )
-    # image_height_m = float(
-    #     calib_metadata.get("calibration", {}).get(
-    #         "image_size_m", {}).get("height")
-    # )
     scale_m_per_px = float(calib_metadata.get(
         "calibration", {}).get("scale_m_per_px"))
 
@@ -500,6 +484,13 @@ def load_config(config_file: Path | str | None) -> Config:
         crop_roi=crop_roi,
     )
 
+    image_width_px_crop, image_height_px_crop = get_roi_size(
+        (image_height_px, image_width_px),
+        crop_roi,
+    )
+    image_width_m_crop = image_width_px_crop * scale_m_per_px
+    image_height_m_crop = image_height_px_crop * scale_m_per_px
+
     return Config(
         config_path=config_path,
         nr_passes=nr_passes,
@@ -515,10 +506,10 @@ def load_config(config_file: Path | str | None) -> Config:
         framerate_hz=framerate_hz,
         timestep_s=timestep_s,
         shutterspeed_ns=shutterspeed_ns,
-        image_width_px=image_width_px,
-        image_height_px=image_height_px,
-        image_width_m=image_width_m,
-        image_height_m=image_height_m,
+        image_width_px=image_width_px_crop,
+        image_height_px=image_height_px_crop,
+        image_width_m=image_width_m_crop,
+        image_height_m=image_height_m_crop,
         scale_m_per_px=scale_m_per_px,
         ds_factor=ds_factor,
         background_dir=background_dir,
