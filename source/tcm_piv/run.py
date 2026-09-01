@@ -842,25 +842,8 @@ def _neighbour_filter_strategy(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the tcm-piv pipeline")
-    parser.add_argument("config", nargs="?", help="Path to a TOML config file")
-    parser.add_argument(
-        "resume_run_dir",
-        nargs="?",
-        help="Existing run directory to resume into (optional)",
-    )
-    parser.add_argument(
-        "--start-pass",
-        type=int,
-        default=1,
-        help="1-based pass index to start at when resuming",
-    )
-
-    args = parser.parse_args(sys.argv[1:])
-    run_dir = run(
-        config_file=args.config,
-        resume_run_dir=args.resume_run_dir,
-        start_pass_1b=int(args.start_pass),
-    )
+    # Local/dev convenience: hardcode a config for quick manual testing.
+    # Keep `run()` itself as a callable API.
+    run_dir = run(config_file="examples\image_pair\input\config_image_pair_tijn.toml")
     print(run_dir)
     raise SystemExit(0)

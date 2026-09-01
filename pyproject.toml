@@ -15,7 +15,9 @@ dependencies = [
 	"matplotlib",
 	"scikit-image",
 	"tqdm",
-	"natsort"]
+	"natsort",
+	"imagecodecs",
+	"tifffile",]
 
 [tool.setuptools]
 package-dir = {"" = "source"}
