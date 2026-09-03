@@ -40,7 +40,9 @@ def find_peaks(corr: np.ndarray, n_peaks: int = 1, min_dist: int = 5, floor: flo
 
     if n_peaks == 1:
         # Find the single peak
-        peaks = np.argwhere(np.amax(corr) == corr).astype(np.float64)
+        peak = np.array(np.unravel_index(
+            np.nanargmax(corr), corr.shape), dtype=np.float64)
+        peaks = peak[None, :]
     else:
         # Find multiple peaks using peak_local_max
         peaks = peak_local_max(corr, min_distance=min_dist,

@@ -330,6 +330,13 @@ def filter_neighbours(coords: np.ndarray, neighbourhood_size: int | str | tuple[
     # Validate neighbourhood size
     n_nbs = _validate_n_nbs(neighbourhood_size, (n_corrs, n_wins_y, n_wins_x))
 
+    # If the number of neighbours is 1 in all directions, return early
+    if n_nbs == (1, 1, 1):
+        if verbose:
+            print(
+                "filter_neighbours: neighbourhood size is 1 in all dimensions; no filtering applied.")
+        return coords.squeeze(axis=-2) if was_4d else coords
+
     # Initialize counters for verbose mode
     if verbose:
         outlier_count = 0

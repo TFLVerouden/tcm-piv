@@ -28,6 +28,7 @@ metadata) and the *output directory* where runs are created.
 from __future__ import annotations
 
 import argparse
+import gc
 from pathlib import Path
 import sys
 from typing import Any
@@ -115,6 +116,9 @@ def run(
     # Timebase used for plotting / any temporal processing.
     # `time_s` has length (NR_IMAGES - 1), matching the number of image pairs.
     # Step 3: Build the timebase (one timestamp per image pair).
+    if np.any(config.frames_to_use == 0):
+        raise ValueError(
+            "frames_to_use must be 1-based (0 is not a valid frame number).")
     frames = config.frames_to_use if isinstance(config.frames_to_use, list) else list(
         range(1, config.nr_images + 1)
     )
@@ -481,14 +485,11 @@ def run(
             disp_nbs=disp_nb,
             disp_final=disp_final,
         )
-
-        # Window positions are no longer persisted; plotting uses `split_n_shift(plot=True)`.
-
-        # Metadata is written last so it can be interpreted as
-        # “this pass finished successfully and produced these artifacts”.
-        print(f"Writing pass metadata: {paths.meta_json.name}")
-        write_meta_json(paths.meta_json, meta)
         prev_disp_final = disp_final
+
+        # Remove some stuff from memory
+        del corrs, corrs_sum, disp_peaks_unf, peak_int_unf, disp_global_5d, disp_global, disp_nb, disp_final, shifts
+        gc.collect()
 
     if disp_final_lastpass is not None:
         print("\nFinal exports: velocity + flow rate")
