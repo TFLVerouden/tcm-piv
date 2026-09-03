@@ -170,21 +170,27 @@ def vel2flow(
     """
     flow_dir = str(flow_direction).strip().lower()
     if flow_dir == "x":
-        component = 1
+        # Take the first column of windows, and the velocity in the x direction
+        vel_component = vel[:, :, 0, 1]
+
+        # The cross-stream width is the image height
         cross_stream_width_m = float(image_height_m)
+
+        # Take the first windows in the x-direction as the flow is assumed uniform across the width.
     elif flow_dir == "y":
-        component = 0
+        vel_component = vel[:, 0, :, 0]
         cross_stream_width_m = float(image_width_m)
     else:
         raise ValueError("flow_direction must be 'x' or 'y'")
 
-    vel_component = vel[..., component]
-    # Average over windows.
-    v_mean = np.nanmean(vel_component, axis=(1, 2))
+    # Calculate the mean velocity across the cross-stream direction for each frame
+    # Always take the first window in the cross-stream direction, as the flow is assumed uniform across the depth.
+    # mean over y and x windows
+    v_mean = np.nanmean(vel_component, axis=1)
 
     # Keep behavior predictable: if any window is NaN for a frame,
     # mark that frame's flow as NaN.
-    frame_has_nan = np.any(np.isnan(vel_component), axis=(1, 2))
+    frame_has_nan = np.any(np.isnan(vel_component), axis=1)
     v_mean = v_mean.astype(float, copy=False)
     v_mean[frame_has_nan] = np.nan
 

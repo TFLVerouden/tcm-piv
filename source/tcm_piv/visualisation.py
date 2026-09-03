@@ -496,7 +496,7 @@ def export_velocity_profiles_pdf(
     else:
         raise ValueError("flow_direction must be 'x' or 'y'")
 
-    velocity_limit = (float(np.nanmin(np.abs(vel_final))),
+    velocity_limit = (float(np.nanmin(vel_final)),
                       float(np.nanmax(np.abs(vel_final))))
 
     if len(time_s) < n_pairs:
