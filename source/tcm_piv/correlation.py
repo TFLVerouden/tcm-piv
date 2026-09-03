@@ -11,6 +11,7 @@ from functools import partial
 
 import numpy as np
 from scipy import signal as sig
+from tcm_piv.utils import double_bits
 from tqdm import tqdm
 
 # Import functions from other submodules
@@ -44,7 +45,7 @@ def calc_corr(i: int, imgs: np.ndarray, n_windows: tuple[int, int], shifts: np.n
         for k in range(n_windows[1]):
 
             # Correlate two (shifted) frames
-            corr = sig.correlate(windows1[j, k].astype(np.uint32), windows0[j, k].astype(np.uint32),
+            corr = sig.correlate(double_bits(windows1[j, k]), double_bits(windows0[j, k]),
                                  method='fft', mode='same')
 
             # Calculate the centre of the correlation map

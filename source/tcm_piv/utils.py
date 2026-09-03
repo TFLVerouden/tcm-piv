@@ -9,6 +9,28 @@ time calculations, and displacement-to-shift conversions.
 import numpy as np
 
 
+def double_bits(arr: np.ndarray) -> np.ndarray:
+    """
+    Double the number of bits in an array.
+
+    This function takes an input array and returns a new array with double the
+    number of bits, effectively converting the data type to a larger integer
+    type. For example, uint8 becomes uint16, int16 becomes int32, etc.
+
+    Args:
+        arr (np.ndarray): Input array of integer type.
+
+    Returns:
+        np.ndarray: New array with double the number of bits.
+    """
+    # Determine the new data type based on the input array's dtype.
+    if np.issubdtype(arr.dtype, np.integer):
+        new_dtype = np.dtype(f"{arr.dtype.kind}{arr.dtype.itemsize * 2}")
+        return arr.astype(new_dtype)
+    else:
+        raise ValueError("Input array must be of integer type.")
+
+
 def get_time(frames: list[int], dt: float) -> np.ndarray:
     """
     Calculate time array for PIV displacements.
