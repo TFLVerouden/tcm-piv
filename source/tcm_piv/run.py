@@ -81,7 +81,7 @@ import numpy as np
 
 import tcm_piv as piv
 import tcm_piv.visualisation as viz
-from tcm_piv.preprocessing import crop
+from tcm_piv.preprocessing import crop, denoise
 from tcm_utils.cough_model import CoughModel
 from tcm_piv.checkpoints import (
     PassStage,
@@ -349,6 +349,8 @@ def run(
                 # TODO: check if image size matches config.camera metadata
 
                 imgs = _apply_crop_and_background(imgs, config)
+                imgs = denoise(imgs, lower_intensity=2, upper_intensity=4096,
+                               shift_to_zero=True, reduce_dtype=True)
 
             # Later passes refine the search region by shifting windows based
             # on the previous pass result.

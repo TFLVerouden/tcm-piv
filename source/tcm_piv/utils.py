@@ -23,12 +23,35 @@ def double_bits(arr: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: New array with double the number of bits.
     """
-    # Determine the new data type based on the input array's dtype.
-    if np.issubdtype(arr.dtype, np.integer):
-        new_dtype = np.dtype(f"{arr.dtype.kind}{arr.dtype.itemsize * 2}")
-        return arr.astype(new_dtype)
+
+    if arr.dtype == np.uint8:
+        return arr.astype(np.uint16)
+    elif arr.dtype == np.uint16:
+        return arr.astype(np.uint32)
+    elif arr.dtype == np.uint32:
+        return arr.astype(np.uint64)
     else:
+        return arr
+
+
+def reduce_bits(arr: np.ndarray) -> np.ndarray:
+    """
+    Based on the maximum value in the array, reduce the number of bits to the
+    smallest possible integer type that can hold the data.
+    """
+    if not np.issubdtype(arr.dtype, np.integer):
         raise ValueError("Input array must be of integer type.")
+
+    max_val = np.max(arr)
+    if max_val == 0:
+        return arr.astype(np.uint8)
+
+    # Find the smallest integer type that can hold the maximum value
+    for dtype in [np.uint8, np.uint16, np.uint32, np.uint64]:
+        if np.iinfo(dtype).max >= max_val:
+            return arr.astype(dtype)
+
+    raise ValueError("Cannot reduce bits to a smaller integer type.")
 
 
 def get_time(frames: list[int], dt: float) -> np.ndarray:
