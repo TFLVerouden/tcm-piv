@@ -107,6 +107,12 @@ def _parse_source(source: dict[str, Any]) -> tuple[Path, Path, str | list[int], 
             "source.frames_to_use must be 'all' or an array of integers")
     if isinstance(frames_to_use, list):
         frames_to_use = [int(v) for v in frames_to_use]
+        if len(frames_to_use) == 2:
+            start, end = frames_to_use
+            if end < start:
+                raise ValueError(
+                    "source.frames_to_use range end must be >= its start")
+            frames_to_use = list(range(start, end + 1))
 
     image_dir = Path(ensure_path(
         str(source["image_dir"]), "image_dir", title="Select image directory"))
@@ -570,11 +576,20 @@ def _maybe_write_updated_config(
     crop_roi: tuple[int, int, int, int],
 ) -> None:
     updated_snapshot = deepcopy(original_snapshot)
+    configured_frames = original_snapshot["source"].get("frames_to_use")
+    frames_for_config = frames_to_use
+    if (
+        isinstance(configured_frames, list)
+        and len(configured_frames) == 2
+        and frames_to_use
+        == list(range(int(configured_frames[0]), int(configured_frames[1]) + 1))
+    ):
+        frames_for_config = configured_frames
     updated_snapshot["source"].update(
         {
             "image_dir": str(image_dir),
             "output_dir": str(output_dir),
-            "frames_to_use": frames_to_use,
+            "frames_to_use": frames_for_config,
         }
     )
     updated_snapshot["camera"].update(
