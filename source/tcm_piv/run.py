@@ -2,22 +2,13 @@
 
 This file orchestrates the end-to-end PIV pipeline:
 - Read/normalize a TOML config via :func:`tcm_piv.init_config.load_config`.
-- Create or reuse a run directory under `<output_dir>/runs/<run_id>/`.
-- For each pass, produce two *checkpoints* on disk:
+- Create a run directory under `<output_dir>/runs/<run_id>/`.
+- For each pass, run correlation + peak finding + postprocessing and write:
 
-    1. **Unfiltered peak-detection results** (`pass_XX_unfiltered.csv.gz`)
-         - Created right after correlation + peak finding.
-         - Contains *all* peaks (multi-peak), so it can be postprocessed later
-             without needing to re-load images.
+    - `pass_XX_post.csv`: the final single-peak displacement field plus some
+        intermediate columns.
+    - `pass_XX_meta.json`: small metadata describing shapes/config for the pass.
 
-    2. **Postprocessed results** (`pass_XX_post.csv`)
-         - Created after global filtering + neighbour filtering (+ optional
-             temporal smoothing).
-         - Contains the “final” single-peak displacement field plus some
-             intermediate columns.
-
-In addition to the checkpoints, each pass writes `pass_XX_meta.json` (small)
-and optionally `pass_XX_win_pos.csv` (window center positions for plotting).
 The mapping from `pair_index -> image0,image1` is written once in `pairs.csv`
 in the run root.
 
@@ -32,41 +23,6 @@ This module is designed to be run as a module:
 
 The config controls both the *input* (image directory + camera/calibration
 metadata) and the *output directory* where runs are created.
-
-How to resume / continue
-------------------------
-
-`run()` supports resuming into an existing run folder by passing it as the
-second positional argument:
-
-`python -m tcm_piv.run path/to/config.toml path/to/output/runs/<run_id>`
-
-Resume logic is purely file-based:
-- If `pass_XX_post.csv` exists, that pass is considered “done” and will be
-    skipped (the file is loaded to provide `prev_disp_final` for the next pass).
-- Else if `pass_XX_unfiltered.csv.gz` exists, correlation/peak detection is
-    skipped and only postprocessing is run.
-- Else the full pass is computed from images.
-
-Resuming from a *specific* checkpoint stage
-------------------------------------------
-
-There is no single “checkpoint list” file; the run folder *is* the list.
-Each pass folder contains the canonical filenames and a `pass_XX_meta.json`
-that also records them.
-
-If you want to restart at a specific stage, the simplest approach is to
-delete the later-stage files and re-run with the same run folder:
-
-- Re-run *postprocessing only* for a pass:
-    - Keep `pass_XX_unfiltered.csv.gz`
-    - Delete `pass_XX_post.csv`
-
-- Re-run *correlation + peak detection + postprocessing* for a pass:
-    - Delete `pass_XX_unfiltered.csv.gz` and `pass_XX_post.csv`
-
-Because image loading is only needed for correlation, the “postprocessing-only”
-resume path is typically much faster and avoids re-reading image data.
 """
 
 from __future__ import annotations
@@ -83,18 +39,12 @@ import tcm_piv as piv
 import tcm_piv.visualisation as viz
 from tcm_piv.preprocessing import crop, denoise
 from tcm_utils.cough_model import CoughModel
-from tcm_piv.checkpoints import (
-    PassStage,
+from tcm_piv.outputs import (
     init_run_dir,
-    load_postprocessed_csv,
-    load_unfiltered_peaks_csv_gz,
-    load_interpolated_mask_csv,
     pass_paths,
-    pass_stage,
     write_meta_json,
     write_pairs_csv,
     write_postprocessed_csv,
-    write_unfiltered_peaks_csv_gz,
 )
 from tcm_utils.io_utils import load_images
 from tcm_utils.time_utils import timestamp_str
@@ -104,15 +54,11 @@ from tcm_piv.init_config import Config, load_config, archive_config
 def run(
     *,
     config_file: str | Path | None = None,
-    resume_run_dir: str | Path | None = None,
-    start_pass_1b: int = 1,
 ) -> Path:
     """Run the PIV pipeline.
 
     Args:
         config_file: Path to a TOML config file. If None, a file picker prompt is used.
-        resume_run_dir: Existing run directory to resume into. If None, a new run is created.
-        start_pass_1b: 1-based pass index to start at when resuming.
 
     Returns:
         run_dir (Path): Path to the run directory where results are stored.
@@ -120,18 +66,10 @@ def run(
 
     print("\n\nStarting PIV analysis...")
 
-    if start_pass_1b < 1:
-        raise ValueError("start_pass_1b must be >= 1")
-
     config_path = Path(config_file) if config_file else None
-    resume_path = Path(resume_run_dir) if resume_run_dir else None
 
     if config_path is not None:
         print(f"Config file: {config_path}")
-    if resume_path is not None:
-        print(f"Resume run dir: {resume_path}")
-    if start_pass_1b != 1:
-        print(f"Start pass (1-based): {start_pass_1b}")
 
     # Step 0: Load + normalize configuration (TOML + defaults + runtime resolution).
     print("\nReading config...")
@@ -145,11 +83,10 @@ def run(
     print(f"  scale_m_per_px: {config.scale_m_per_px}")
     print(f"  output_dir: {config.output_dir}")
 
-    # Each run gets its own directory so results are reproducible and
-    # resumable. When resuming, the run folder is provided explicitly.
-    # Step 1: Create a run directory (or resume into an existing run).
+    # Each run gets its own directory so results are reproducible.
+    # Step 1: Create a run directory.
     run_id = timestamp_str()
-    run_dir = resume_path or init_run_dir(config.output_dir, run_id)
+    run_dir = init_run_dir(config.output_dir, run_id)
     print(f"\nRun directory: {run_dir}")
 
     # Archive the configuration file.
@@ -197,11 +134,6 @@ def run(
     # next pass (multi-pass PIV refinement).
     prev_disp_final: np.ndarray | None = None
 
-    if start_pass_1b > config.nr_passes:
-        raise ValueError(
-            f"start_pass ({start_pass_1b}) exceeds configured nr_passes ({config.nr_passes})"
-        )
-
     # Step 4: Multi-pass refinement loop.
     for pass_idx0 in range(config.nr_passes):
         pass_idx1 = pass_idx0 + 1
@@ -216,26 +148,6 @@ def run(
         print(
             f"\nPASS {pass_idx1:02d}/{int(config.nr_passes):02d}: n_windows=({n_win_y},{n_win_x})"
         )
-
-        if pass_idx1 < start_pass_1b:
-            if resume_path is None:
-                raise ValueError(
-                    "start_pass_1b > 1 requires resume_run_dir pointing to an existing run"
-                )
-            if not paths.post_csv.exists():
-                raise RuntimeError(
-                    f"Requested start at pass {start_pass_1b}, but prior pass {pass_idx1} has no post file: {paths.post_csv}"
-                )
-            print(
-                f"Skipping pass {pass_idx1:02d} (before start_pass). Loading post checkpoint: {paths.post_csv.name}"
-            )
-            _, _, _, prev_disp_final = load_postprocessed_csv(
-                paths.post_csv,
-                n_pairs=n_img_pairs,
-                n_wy=n_win_y,
-                n_wx=n_win_x,
-            )
-            continue
 
         # Config ordering is always [vy, vx].
         vy_max_m_s, vx_max_m_s = config.max_velocity_vy_vx_m_s[pass_idx0]
@@ -262,7 +174,7 @@ def run(
 
         # Metadata is written once the pass completes.
         # It documents shapes, key config knobs, and the filenames that belong
-        # to this pass. This is also the closest thing to a “checkpoint index”.
+        # to this pass.
         meta: dict[str, Any] = {
             "pass": pass_idx1,
             "n_pairs": n_img_pairs,
@@ -280,154 +192,89 @@ def run(
             "time_smoothing_lambda": time_smooth_lam,
             "files": {
                 "pairs": "../pairs.csv",
-                "unfiltered": paths.peaks_csv_gz.name,
                 "post": paths.post_csv.name,
             },
         }
 
-        # Step 4a: Resume logic (file-based checkpoints).
-        stage = pass_stage(paths)
+        # Step 4b: Load images once (only if we need to compute correlations).
+        if imgs is None:
 
-        # Stage 2 (postprocessed) is authoritative: if it exists, the pass is done.
-        if stage is PassStage.POST:
-            print(
-                f"Found postprocessed checkpoint: {paths.post_csv.name} -> skipping correlation + postprocessing"
-            )
-            _, _, _, disp_final = load_postprocessed_csv(
-                paths.post_csv,
-                n_pairs=n_img_pairs,
-                n_wy=n_win_y,
-                n_wx=n_win_x,
-            )
-            if plot_windows:
-                shifts = None
-                if pass_idx0 > 0 and prev_disp_final is not None:
-                    shifts = piv.disp2shift(
-                        n_windows=(n_win_y, n_win_x),
-                        displacements=prev_disp_final,
-                    )
-                window_layouts.append({
-                    "pass": pass_idx1,
-                    "n_windows": (n_win_y, n_win_x),
-                    "overlap": overlap,
-                    "shifts": shifts,
-                })
+            print("Loading images...")
+            imgs = np.asarray(load_images(
+                config.image_list, show_progress=True))
 
-            if pass_idx0 == config.nr_passes - 1:
-                disp_final_lastpass = disp_final
-                mask_csv = run_dir / "interpolated_mask.csv"
-                if mask_csv.exists():
-                    interp_filled_mask = load_interpolated_mask_csv(
-                        mask_csv,
-                        n_pairs=n_img_pairs,
-                        n_wy=n_win_y,
-                        n_wx=n_win_x,
-                    )
-            prev_disp_final = disp_final
-            continue
+            # TODO: check if image size matches config.camera metadata
 
-        # Stage 1 checkpoint: correlation + peak finding done; resume is image-free.
-        if stage is PassStage.UNFILTERED:
-            print(
-                f"Found unfiltered checkpoint: {paths.peaks_csv_gz.name} -> skipping correlation + peak finding"
-            )
-            disp_peaks_unf, peak_int_unf = load_unfiltered_peaks_csv_gz(
-                paths.peaks_csv_gz,
-                n_pairs=n_img_pairs,
-                n_wy=n_win_y,
-                n_wx=n_win_x,
-                n_peaks=n_peaks,
-            )
+            imgs = _apply_crop_and_background(imgs, config)
+            imgs = denoise(imgs, lower_intensity=2, upper_intensity=4096,
+                           shift_to_zero=True, reduce_dtype=True)
+
+        # Later passes refine the search region by shifting windows based
+        # on the previous pass result.
+        if pass_idx0 == 0:
+            shifts = None
         else:
-            # Step 4b: Load images once (only if we need to compute correlations).
-            if imgs is None:
+            if prev_disp_final is None:
+                raise RuntimeError(
+                    f"Pass {pass_idx1} needs previous displacement to compute shifts")
+            print("Computing window shifts from previous pass...")
+            shifts = piv.disp2shift(
+                n_windows=(n_win_y, n_win_x),
+                displacements=prev_disp_final,
+            )
 
-                print("Loading images...")
-                imgs = np.asarray(load_images(
-                    config.image_list, show_progress=True))
+            # Replace NaNs (from invalid vectors in prev pass) with 0.0 shift
+            shifts = np.nan_to_num(shifts, nan=0.0)
 
-                # TODO: check if image size matches config.camera metadata
+        # 1) Calculate correlations per pair/window.
+        print("Step 1: calculating correlation maps...")
+        corrs = piv.calc_corrs(
+            imgs,
+            n_windows=(n_win_y, n_win_x),
+            shifts=shifts,
+            overlap=overlap,
+            ds_factor=ds_factor,
+        )
 
-                imgs = _apply_crop_and_background(imgs, config)
-                imgs = denoise(imgs, lower_intensity=2, upper_intensity=4096,
-                               shift_to_zero=True, reduce_dtype=True)
+        # 2) Optionally sum correlations over a time window.
+        #    This is a denoising/smoothing step in correlation space.
+        print(
+            f"Step 2: summing correlation maps (corrs_to_sum={n_corrs_to_sum})...")
+        corrs_sum = piv.sum_corrs(
+            corrs,
+            n_corrs_to_sum,
+            n_windows=(n_win_y, n_win_x),
+            shifts=shifts,
+        )
 
-            # Later passes refine the search region by shifting windows based
-            # on the previous pass result.
-            if pass_idx0 == 0:
-                shifts = None
-            else:
-                if prev_disp_final is None:
-                    raise RuntimeError(
-                        f"Pass {pass_idx1} needs previous displacement to compute shifts")
-                print("Computing window shifts from previous pass...")
-                shifts = piv.disp2shift(
-                    n_windows=(n_win_y, n_win_x),
-                    displacements=prev_disp_final,
+        if bool(config.plot_correlations):
+            plots_dir = run_dir / "plots"
+            corr_dir = plots_dir / "correlations" / f"pass_{pass_idx1:02d}"
+            j_mid = int(n_win_y) // 2
+            k_mid = int(n_win_x) // 2
+            for pair_i in range(n_img_pairs):
+                corr_map, corr_center = corrs_sum[(pair_i, j_mid, k_mid)]
+                title = f"Pass {pass_idx1} pair {pair_i} win ({j_mid},{k_mid})"
+                viz.plot_correlation_map(
+                    np.asarray(corr_map),
+                    center_yx=(int(corr_center[0]), int(corr_center[1])),
+                    title=title,
+                    output_path=corr_dir / f"pair_{pair_i:04d}.png",
                 )
 
-                # Replace NaNs (from invalid vectors in prev pass) with 0.0 shift
-                shifts = np.nan_to_num(shifts, nan=0.0)
+        # 3) Find displacement peaks in the correlation planes.
+        print(f"Step 3: finding peaks (nr_peaks={n_peaks})...")
+        disp_peaks_unf, peak_int_unf = piv.find_disps(
+            corrs_sum,
+            n_windows=(n_win_y, n_win_x),
+            shifts=shifts,
+            n_peaks=n_peaks,
+            ds_factor=ds_factor,
+            min_dist=min_peak_dist_px,
+            do_subpixel=pass_idx0 == config.nr_passes - 1,
+        )
 
-            # 1) Calculate correlations per pair/window.
-            print("Step 1: calculating correlation maps...")
-            corrs = piv.calc_corrs(
-                imgs,
-                n_windows=(n_win_y, n_win_x),
-                shifts=shifts,
-                overlap=overlap,
-                ds_factor=ds_factor,
-            )
-
-            # 2) Optionally sum correlations over a time window.
-            #    This is a denoising/smoothing step in correlation space.
-            print(
-                f"Step 2: summing correlation maps (corrs_to_sum={n_corrs_to_sum})...")
-            corrs_sum = piv.sum_corrs(
-                corrs,
-                n_corrs_to_sum,
-                n_windows=(n_win_y, n_win_x),
-                shifts=shifts,
-            )
-
-            if bool(config.plot_correlations):
-                plots_dir = run_dir / "plots"
-                corr_dir = plots_dir / "correlations" / f"pass_{pass_idx1:02d}"
-                j_mid = int(n_win_y) // 2
-                k_mid = int(n_win_x) // 2
-                for pair_i in range(n_img_pairs):
-                    corr_map, corr_center = corrs_sum[(pair_i, j_mid, k_mid)]
-                    title = f"Pass {pass_idx1} pair {pair_i} win ({j_mid},{k_mid})"
-                    viz.plot_correlation_map(
-                        np.asarray(corr_map),
-                        center_yx=(int(corr_center[0]), int(corr_center[1])),
-                        title=title,
-                        output_path=corr_dir / f"pair_{pair_i:04d}.png",
-                    )
-
-            # 3) Find displacement peaks in the correlation planes.
-            print(f"Step 3: finding peaks (nr_peaks={n_peaks})...")
-            disp_peaks_unf, peak_int_unf = piv.find_disps(
-                corrs_sum,
-                n_windows=(n_win_y, n_win_x),
-                shifts=shifts,
-                n_peaks=n_peaks,
-                ds_factor=ds_factor,
-                min_dist=min_peak_dist_px,
-                do_subpixel=pass_idx0 == config.nr_passes - 1,
-            )
-
-            # Window positions (for plotting/interpretation) are derived from
-            # the first image only (geometry only, no time dependence).
-            # Persist stage-1 checkpoint.
-            print(f"Writing unfiltered checkpoint: {paths.peaks_csv_gz.name}")
-            write_unfiltered_peaks_csv_gz(
-                paths.peaks_csv_gz,
-                disp_unf=disp_peaks_unf,
-                int_unf=peak_int_unf,
-            )
-
-        # Stage 2: postprocess the multi-peak results into a usable single-peak
+        # Postprocess the multi-peak results into a usable single-peak
         # displacement field, applying outlier and neighbour filtering.
         print("Postprocessing: outlier + neighbour filtering")
         a_y = float(vy_max_m_s) * float(config.timestep_s) / \
@@ -625,8 +472,7 @@ def run(
         if pass_idx0 == config.nr_passes - 1:
             disp_final_lastpass = disp_final
 
-        # Persist stage-2 checkpoint.
-        print(f"Writing postprocessed checkpoint: {paths.post_csv.name}")
+        print(f"Writing pass results: {paths.post_csv.name}")
         write_postprocessed_csv(
             paths.post_csv,
             time_s=time_s,
@@ -863,16 +709,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the tcm-piv pipeline.")
     parser.add_argument("config_file", nargs="?",
                         help="Path to a TOML config file.")
-    parser.add_argument("resume_run_dir", nargs="?",
-                        help="Existing run directory to resume into.")
-    parser.add_argument("--start-pass", type=int, default=1,
-                        help="1-based pass index to start at when resuming.")
     args = parser.parse_args()
 
-    run_dir = run(
-        config_file=args.config_file,
-        resume_run_dir=args.resume_run_dir,
-        start_pass_1b=args.start_pass,
-    )
+    run_dir = run(config_file=args.config_file)
     print(run_dir)
     raise SystemExit(0)

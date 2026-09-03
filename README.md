@@ -16,5 +16,4 @@ interpreted as a range.
 ## Todo
 - swap order of peak detection and global filter?
 - save log files (basically all print statements saved with timestamps?)
-- fix resume run (not working currently)
 - fix weird error in filter_neighbours
