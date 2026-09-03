@@ -25,6 +25,8 @@ from matplotlib.patches import Circle, Rectangle, Wedge
 
 from tcm_piv.preprocessing import split_n_shift
 
+from tcm_utils.cvd_check import set_cvd_friendly_colors
+
 
 def _as_temporal_disp_2col(displacements: np.ndarray) -> np.ndarray:
     """Normalize displacement input to shape (n_time, 2) as (dy_px, dx_px)."""
@@ -391,6 +393,42 @@ def plot_flow_rate(
     ax.set_xlabel("Time (ms)")
     ax.set_ylabel("Flow rate (L/s)")
     ax.set_title("Flow rate vs time")
+    ax.grid(True, linestyle=":", alpha=0.5)
+    ax.legend(loc="upper right")
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=200)
+
+    return fig, ax
+
+
+def plot_flow_rate_series(
+    series: list[tuple[str, np.ndarray, np.ndarray]],
+    *,
+    title: str | None = None,
+    output_path: Path | None = None,
+) -> tuple[Figure, Axes]:
+    """Plot multiple flow-rate series on one set of axes."""
+
+    set_cvd_friendly_colors()
+
+    if not series:
+        raise ValueError("series must contain at least one flow-rate dataset")
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for label, time_s, flow_ls in series:
+        t = np.asarray(time_s).reshape(-1)
+        q = np.asarray(flow_ls).reshape(-1)
+        if t.shape != q.shape:
+            raise ValueError(
+                f"time_s and flow_ls must have matching shape for {label!r}, got {t.shape} vs {q.shape}"
+            )
+        ax.plot(t * 1000.0, q, label=label)
+
+    ax.set_xlabel("Time (ms)")
+    ax.set_ylabel("Flow rate (L/s)")
+    ax.set_title(title or "Flow rate vs time")
     ax.grid(True, linestyle=":", alpha=0.5)
     ax.legend(loc="upper right")
 
