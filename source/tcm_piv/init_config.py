@@ -395,7 +395,7 @@ def _parse_visualisation(
     )
 
 
-def load_config(config_file: Path | str | None) -> Config:
+def load_config(config_file: Path | str | None) -> (Config, Path):
     """Load TOML config, apply defaults, normalize settings, and return a Config."""
 
     config_path = _resolve_config_path(config_file)
@@ -421,7 +421,6 @@ def load_config(config_file: Path | str | None) -> Config:
     visualisation = merged["visualisation"]
 
     image_dir, output_dir, frames_to_use, image_list = _parse_source(source)
-    _archive_config(config_path, output_dir)
     print(f"Number of images to process: {len(image_list)}")
     nr_images = len(image_list)
 
@@ -498,7 +497,7 @@ def load_config(config_file: Path | str | None) -> Config:
     image_width_m_crop = image_width_px_crop * scale_m_per_px
     image_height_m_crop = image_height_px_crop * scale_m_per_px
 
-    return Config(
+    return (Config(
         config_path=config_path,
         nr_passes=nr_passes,
         image_dir=image_dir,
@@ -543,10 +542,10 @@ def load_config(config_file: Path | str | None) -> Config:
         plot_window_layout=plot_window_layout,
         plot_flow_rate=plot_flow_rate,
         export_velocity_profiles_pdf=export_velocity_profiles_pdf,
-    )
+    ), config_path)
 
 
-def _archive_config(config_path: Path, output_dir: Path) -> None:
+def archive_config(config_path: Path, output_dir: Path) -> None:
     """Copy the used config into the run's output_dir for provenance."""
     output_dir.mkdir(parents=True, exist_ok=True)
     archive_path = output_dir / \

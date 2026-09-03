@@ -98,7 +98,7 @@ from tcm_piv.checkpoints import (
 )
 from tcm_utils.io_utils import load_images
 from tcm_utils.time_utils import timestamp_str
-from tcm_piv.init_config import Config, load_config
+from tcm_piv.init_config import Config, load_config, archive_config
 
 
 def run(
@@ -135,7 +135,7 @@ def run(
 
     # Step 0: Load + normalize configuration (TOML + defaults + runtime resolution).
     print("\nReading config...")
-    config = load_config(config_path)
+    config, config_path = load_config(config_path)
 
     print("Config summary:")
     print(f"  image_dir: {config.image_dir}")
@@ -151,6 +151,9 @@ def run(
     run_id = timestamp_str()
     run_dir = resume_path or init_run_dir(config.output_dir, run_id)
     print(f"\nRun directory: {run_dir}")
+
+    # Archive the configuration file.
+    archive_config(config_path, run_dir)
 
     # Pair mapping for CSV row -> image filenames.
     #
@@ -856,9 +859,12 @@ def _neighbour_filter_strategy(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the tcm-piv pipeline.")
-    parser.add_argument("config_file", nargs="?", help="Path to a TOML config file.")
-    parser.add_argument("resume_run_dir", nargs="?", help="Existing run directory to resume into.")
-    parser.add_argument("--start-pass", type=int, default=1, help="1-based pass index to start at when resuming.")
+    parser.add_argument("config_file", nargs="?",
+                        help="Path to a TOML config file.")
+    parser.add_argument("resume_run_dir", nargs="?",
+                        help="Existing run directory to resume into.")
+    parser.add_argument("--start-pass", type=int, default=1,
+                        help="1-based pass index to start at when resuming.")
     args = parser.parse_args()
 
     run_dir = run(
