@@ -37,7 +37,7 @@ import numpy as np
 
 import tcm_piv as piv
 import tcm_piv.visualisation as viz
-from tcm_piv.preprocessing import crop, denoise
+from tcm_piv.preprocessing import crop, denoise_images
 from tcm_utils.cough_model import CoughModel
 from tcm_piv.outputs import (
     init_run_dir,
@@ -206,8 +206,10 @@ def run(
 
             # Step 4c: Pre-processing
             imgs = _apply_crop_and_background(imgs, config)
-            imgs = denoise(imgs, lower_intensity=2, upper_intensity=4096,
-                           shift_to_zero=True, reduce_dtype=True)
+            imgs = denoise_images(imgs, background_blur_sigma=config.denoise_blur_sigma,
+                                  lower_intensity=config.denoise_lower_int,
+                                  upper_intensity=config.denoise_upper_int,
+                                  shift_to_zero=True, reduce_dtype=True)
 
         # Later passes refine the search region by shifting windows based
         # on the previous pass result.

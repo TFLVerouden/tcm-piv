@@ -6,7 +6,8 @@ including downsampling and splitting images into interrogation windows.
 """
 
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import numpy as np
 import matplotlib
@@ -22,7 +23,67 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 
-def denoise(
+def denoise_image(
+    image: np.ndarray,
+    *,
+    background_blur_sigma: int = 32,
+    lower_intensity: int = 2,
+    upper_intensity: int = 255,
+    shift_to_zero: bool = True,
+    debug: bool = False,
+) -> np.ndarray:
+    """Subtract a blurred background from a single image and clip intensities.
+
+    Parameters
+    ----------
+    image : np.ndarray
+        2D array (y, x).
+    background_blur_sigma : int
+        Sigma for Gaussian blur to estimate background.
+    lower_intensity : int
+        Minimum intensity after clipping.
+    upper_intensity : int
+        Maximum intensity after clipping.
+    shift_to_zero : bool
+        If True, shift intensity values so the minimum value is 0.
+    debug : bool
+        If True, print debug information.
+
+    Returns
+    -------
+    np.ndarray
+        Denoised 2D image.
+    """
+    image = np.asarray(image)
+
+    background = cv.GaussianBlur(image, (0, 0), background_blur_sigma)
+
+    if debug:
+        print(f"  Original min: {image.min()}, max: {image.max()}")
+        print(f"  Background min: {background.min()}, max: {background.max()}")
+
+    denoised = cv.subtract(image, background)
+
+    if debug:
+        print(
+            f"  After background subtraction min: {denoised.min()}, max: {denoised.max()}")
+
+    denoised = np.clip(denoised, lower_intensity, upper_intensity)
+
+    if debug:
+        print(f"  After clipping min: {denoised.min()}, max: {denoised.max()}")
+
+    if shift_to_zero:
+        denoised -= np.min(denoised)
+
+    if debug:
+        print(
+            f"  After shifting to zero min: {denoised.min()}, max: {denoised.max()}")
+
+    return denoised
+
+
+def denoise_images(
     imgs: np.ndarray,
     background_blur_sigma: int = 32,
     lower_intensity: int = 2,
@@ -33,7 +94,6 @@ def denoise(
     *,
     n_jobs: int | None = None,
     show_progress: bool = True,
-    chunk_size: int = 16,
 ) -> np.ndarray:
     """For each image in the stack, subtract a blurred background and clip the
     intensity values. Optionally, after that, all intensity values are shifted
@@ -41,25 +101,34 @@ def denoise(
     dtype will be reduced to the smallest based on the largest value in the
     stack of images.
 
-    Args:
-        imgs (np.ndarray): 3D array of images (image_index, y, x).
-        background_blur_sigma (int): Sigma for Gaussian blur to estimate
-            background.
-        lower_intensity (int): Minimum intensity after clipping
-            (everything below this value will be set to this value).
-        upper_intensity (int): Maximum intensity after clipping (likewise).
-        shift_to_zero (bool): If True, shift all intensity values so that the
-            minimum value is 0.
-        reduce_dtype (bool): If True, reduce the output dtype to the smallest
-            based on the largest value in the stack of images.
-        debug (bool): If True, print debug information.
-        n_jobs (int | None): Max workers for ``ThreadPoolExecutor``.
-        show_progress (bool): If True, wrap chunk processing in a tqdm bar.
-        chunk_size (int): Number of images per worker chunk.
-    Returns:
-        np.ndarray: 3D array of denoised images (image_index, y, x).
-    """
+    Parameters
+    ----------
+    imgs : np.ndarray
+        3D array of images (image_index, y, x).
+    background_blur_sigma : int
+        Sigma for Gaussian blur to estimate background.
+    lower_intensity : int
+        Minimum intensity after clipping (everything below this value will
+        be set to this value).
+    upper_intensity : int
+        Maximum intensity after clipping (likewise).
+    shift_to_zero : bool
+        If True, shift all intensity values so that the minimum value is 0.
+    reduce_dtype : bool
+        If True, reduce the output dtype to the smallest based on the
+        largest value in the stack of images.
+    debug : bool
+        If True, print debug information.
+    n_jobs : int | None
+        Max workers for ``ThreadPoolExecutor``. Defaults to ``os.cpu_count()``.
+    show_progress : bool
+        If True, wrap the loop in a tqdm progress bar.
 
+    Returns
+    -------
+    np.ndarray
+        3D array of denoised images (image_index, y, x).
+    """
     # Checks
     if lower_intensity < 0 or upper_intensity < 0:
         raise ValueError("Intensity values must be non-negative.")
@@ -67,76 +136,27 @@ def denoise(
         raise ValueError("lower_intensity must be less than upper_intensity.")
     if background_blur_sigma < 0:
         raise ValueError("background_blur_sigma must be non-negative.")
-    if chunk_size < 1:
-        raise ValueError("chunk_size must be >= 1")
 
     n_images = imgs.shape[0]
     max_workers = n_jobs or (os.cpu_count() or 4)
 
-    def _process_chunk(i0: int, i1: int) -> tuple[int, np.ndarray]:
-        chunk = np.empty_like(imgs[i0:i1])
-        for local_i, i in enumerate(range(i0, i1)):
-            image = np.asarray(imgs[i])
-
-            # Generate blurred background using Gaussian filter.
-            background = cv.GaussianBlur(image, (0, 0), background_blur_sigma)
-
-            if debug:
-                print(f"Image {i}:")
-                print(f"  Original min: {image.min()}, max: {image.max()}")
-                print(
-                    f"  Background min: {background.min()}, max: {background.max()}")
-
-            denoised = cv.subtract(image, background)
-
-            if debug:
-                print(
-                    f"  After background subtraction min: {denoised.min()}, max: {denoised.max()}")
-
-            denoised = np.clip(denoised, lower_intensity, upper_intensity)
-
-            if debug:
-                print(
-                    f"  After clipping min: {denoised.min()}, max: {denoised.max()}")
-
-            if shift_to_zero:
-                denoised -= np.min(denoised)
-
-            if debug:
-                print(
-                    f"  After shifting to zero min: {denoised.min()}, max: {denoised.max()}")
-
-            chunk[local_i] = denoised
-
-        return i0, chunk
-
-    chunk_ranges = [
-        (i0, min(n_images, i0 + chunk_size))
-        for i0 in range(0, n_images, chunk_size)
-    ]
-
-    denoised_imgs = np.empty_like(imgs)
+    denoise_fn = partial(
+        denoise_image,
+        background_blur_sigma=background_blur_sigma,
+        lower_intensity=lower_intensity,
+        upper_intensity=upper_intensity,
+        shift_to_zero=shift_to_zero,
+        debug=debug,
+    )
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_process_chunk, i0, i1)
-                   for (i0, i1) in chunk_ranges]
-
-        iterator = as_completed(futures)
+        iterator = executor.map(denoise_fn, [imgs[i] for i in range(n_images)])
         if show_progress:
-            iterator = tqdm(
-                iterator,
-                total=len(futures),
-                desc="Denoising images",
-                leave=False,
-                miniters=1,
-                mininterval=0.1,
-                dynamic_ncols=True,
-            )
+            iterator = tqdm(iterator, total=n_images,
+                            desc="Denoising images", leave=False)
+        denoised_list = list(iterator)
 
-        for fut in iterator:
-            i0, chunk = fut.result()
-            i1 = i0 + chunk.shape[0]
-            denoised_imgs[i0:i1] = chunk
+    denoised_imgs = np.stack(denoised_list, axis=0)
 
     # Reduce dtype if requested
     if reduce_dtype:
@@ -152,6 +172,138 @@ def denoise(
         print(f"  shape: {denoised_imgs.shape}")
 
     return denoised_imgs.astype(imgs.dtype)
+
+
+# def denoise(
+#     imgs: np.ndarray,
+#     background_blur_sigma: int = 32,
+#     lower_intensity: int = 2,
+#     upper_intensity: int = 255,
+#     shift_to_zero: bool = True,
+#     reduce_dtype: bool = True,
+#     debug: bool = False,
+#     *,
+#     n_jobs: int | None = None,
+#     show_progress: bool = True,
+#     chunk_size: int = 128,
+# ) -> np.ndarray:
+#     """For each image in the stack, subtract a blurred background and clip the
+#     intensity values. Optionally, after that, all intensity values are shifted
+#     so that the minimum value is 0. Also, if reduce_dtype is True, the output
+#     dtype will be reduced to the smallest based on the largest value in the
+#     stack of images.
+
+#     Args:
+#         imgs (np.ndarray): 3D array of images (image_index, y, x).
+#         background_blur_sigma (int): Sigma for Gaussian blur to estimate
+#             background.
+#         lower_intensity (int): Minimum intensity after clipping
+#             (everything below this value will be set to this value).
+#         upper_intensity (int): Maximum intensity after clipping (likewise).
+#         shift_to_zero (bool): If True, shift all intensity values so that the
+#             minimum value is 0.
+#         reduce_dtype (bool): If True, reduce the output dtype to the smallest
+#             based on the largest value in the stack of images.
+#         debug (bool): If True, print debug information.
+#         n_jobs (int | None): Max workers for ``ThreadPoolExecutor``.
+#         show_progress (bool): If True, wrap chunk processing in a tqdm bar.
+#         chunk_size (int): Number of images per worker chunk.
+#     Returns:
+#         np.ndarray: 3D array of denoised images (image_index, y, x).
+#     """
+
+#     # Checks
+#     if lower_intensity < 0 or upper_intensity < 0:
+#         raise ValueError("Intensity values must be non-negative.")
+#     if lower_intensity >= upper_intensity:
+#         raise ValueError("lower_intensity must be less than upper_intensity.")
+#     if background_blur_sigma < 0:
+#         raise ValueError("background_blur_sigma must be non-negative.")
+#     if chunk_size < 1:
+#         raise ValueError("chunk_size must be >= 1")
+
+#     n_images = imgs.shape[0]
+#     max_workers = n_jobs or (os.cpu_count() or 4)
+
+#     def _process_chunk(i0: int, i1: int) -> tuple[int, np.ndarray]:
+#         chunk = np.empty_like(imgs[i0:i1])
+#         for local_i, i in enumerate(range(i0, i1)):
+#             image = np.asarray(imgs[i])
+
+#             # Generate blurred background using Gaussian filter.
+#             background = cv.GaussianBlur(image, (0, 0), background_blur_sigma)
+
+#             if debug:
+#                 print(f"Image {i}:")
+#                 print(f"  Original min: {image.min()}, max: {image.max()}")
+#                 print(
+#                     f"  Background min: {background.min()}, max: {background.max()}")
+
+#             denoised = cv.subtract(image, background)
+
+#             if debug:
+#                 print(
+#                     f"  After background subtraction min: {denoised.min()}, max: {denoised.max()}")
+
+#             denoised = np.clip(denoised, lower_intensity, upper_intensity)
+
+#             if debug:
+#                 print(
+#                     f"  After clipping min: {denoised.min()}, max: {denoised.max()}")
+
+#             if shift_to_zero:
+#                 denoised -= np.min(denoised)
+
+#             if debug:
+#                 print(
+#                     f"  After shifting to zero min: {denoised.min()}, max: {denoised.max()}")
+
+#             chunk[local_i] = denoised
+
+#         return i0, chunk
+
+#     chunk_ranges = [
+#         (i0, min(n_images, i0 + chunk_size))
+#         for i0 in range(0, n_images, chunk_size)
+#     ]
+
+#     denoised_imgs = np.empty_like(imgs)
+
+#     with ThreadPoolExecutor(max_workers=max_workers) as executor:
+#         futures = [executor.submit(_process_chunk, i0, i1)
+#                    for (i0, i1) in chunk_ranges]
+
+#         iterator = as_completed(futures)
+#         if show_progress:
+#             iterator = tqdm(
+#                 iterator,
+#                 total=len(futures),
+#                 desc="Denoising images",
+#                 leave=False,
+#                 miniters=1,
+#                 mininterval=0.1,
+#                 dynamic_ncols=True,
+#             )
+
+#         for fut in iterator:
+#             i0, chunk = fut.result()
+#             i1 = i0 + chunk.shape[0]
+#             denoised_imgs[i0:i1] = chunk
+
+#     # Reduce dtype if requested
+#     if reduce_dtype:
+#         denoised_imgs = reduce_bits(denoised_imgs)
+
+#     # Debug information
+#     if debug:
+#         print(f"Original image stack:")
+#         print(f"  dtype: {imgs.dtype}")
+#         print(f"  shape: {imgs.shape}")
+#         print(f"Denoised image stack:")
+#         print(f"  dtype: {denoised_imgs.dtype}")
+#         print(f"  shape: {denoised_imgs.shape}")
+
+#     return denoised_imgs.astype(imgs.dtype)
 
 
 def generate_background(

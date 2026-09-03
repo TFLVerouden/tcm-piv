@@ -50,6 +50,11 @@ crop_roi = [0, 0, 0, 0]
 # *Sum pixels over squares of size (ds_factor x ds_factor)
 ds_factor = [1]
 
+# Denoising parameters
+denoise_blur_sigma = 32
+denoise_lower_int = 2
+denoise_upper_int = 4096
+
 [correlation]
 # *Number of correlation maps (time steps) that will be summed before starting
 # peak detection. Fancy averaging in time, basically.
