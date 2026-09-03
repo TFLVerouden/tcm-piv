@@ -30,8 +30,8 @@ class PassPaths:
     meta_json: Path
 
 
-def init_run_dir(output_dir: Path, run_id: str) -> Path:
-    run_dir = output_dir / "runs" / run_id
+def init_run_dir(output_dir: Path, run_id: str, *, overwrite_runs: bool = False) -> Path:
+    run_dir = output_dir if overwrite_runs else output_dir / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
 

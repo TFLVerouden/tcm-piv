@@ -67,7 +67,11 @@ class Config:
         raise AttributeError(f"Config has no field {name!r}")
 
 
-def load_config(config_file: Path | str | None) -> tuple[Config, Path]:
+def load_config(
+    config_file: Path | str | None,
+    *,
+    overrides: dict[str, Any] | None = None,
+) -> tuple[Config, Path]:
     """Load TOML config, merge with packaged defaults, and resolve it."""
 
     config_path = _resolve_config_path(config_file)
@@ -77,6 +81,8 @@ def load_config(config_file: Path | str | None) -> tuple[Config, Path]:
         user_cfg = tomllib.load(fp)
 
     merged = _deep_merge(_read_packaged_default_config(), user_cfg)
+    if overrides:
+        merged = _deep_merge(merged, overrides)
 
     nr_passes = int(merged["nr_passes"])
     if nr_passes < 1:
