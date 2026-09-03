@@ -2,7 +2,9 @@
 
 This file orchestrates the end-to-end PIV pipeline:
 - Read/normalize a TOML config via :func:`tcm_piv.init_config.load_config`.
-- Create a run directory under `<output_dir>/runs/<run_id>/`.
+- Create a run directory under `<output_dir>/runs/<run_id>/` unless the
+    config sets ``overwrite_runs = true``, in which case results are written
+    directly into ``output_dir``.
 - For each pass, run correlation + peak finding + postprocessing and write:
 
     - `pass_XX_post.csv`: the final single-peak displacement field plus some
@@ -27,10 +29,8 @@ metadata) and the *output directory* where runs are created.
 
 from __future__ import annotations
 
-import argparse
 import gc
 from pathlib import Path
-import sys
 from typing import Any
 
 import cv2 as cv
@@ -49,12 +49,14 @@ from tcm_piv.outputs import (
 )
 from tcm_utils.io_utils import load_images
 from tcm_utils.time_utils import timestamp_str
+from tcm_utils.cvd_check import set_cvd_friendly_colors
 from tcm_piv.init_config import Config, load_config, archive_config
 
 
 def run(
     *,
     config_file: str | Path | None = None,
+    config_overrides: dict[str, Any] | None = None,
 ) -> Path:
     """Run the PIV pipeline.
 
@@ -66,7 +68,6 @@ def run(
     """
 
     print("\n\nStarting PIV analysis...")
-
     config_path = Path(config_file) if config_file else None
 
     if config_path is not None:
@@ -74,7 +75,7 @@ def run(
 
     # Step 0: Load + normalize configuration (TOML + defaults + runtime resolution).
     print("\nReading config...")
-    config, config_path = load_config(config_path)
+    config, config_path = load_config(config_path, overrides=config_overrides)
 
     print("Config summary:")
     print(f"  image_dir: {config.image_dir}")
@@ -83,11 +84,17 @@ def run(
     print(f"  timestep_s: {config.timestep_s}")
     print(f"  scale_m_per_px: {config.scale_m_per_px}")
     print(f"  output_dir: {config.output_dir}")
+    print(
+        f"  overwrite_runs: {bool(getattr(config, 'overwrite_runs', False))}")
 
     # Each run gets its own directory so results are reproducible.
     # Step 1: Create a run directory.
     run_id = timestamp_str()
-    run_dir = init_run_dir(config.output_dir, run_id)
+    run_dir = init_run_dir(
+        config.output_dir,
+        run_id,
+        overwrite_runs=bool(getattr(config, "overwrite_runs", False)),
+    )
     print(f"\nRun directory: {run_dir}")
 
     # Archive the configuration file.
@@ -708,12 +715,4 @@ def _neighbour_filter_strategy(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the tcm-piv pipeline.")
-    parser.add_argument("config_file", nargs="?",
-                        help="Path to a TOML config file.")
-    args = parser.parse_args()
-
-    run_dir = run(
-        config_file="/Volumes/Data/PIV/260820_piv/step_1-5bar/260831_152310_step_1-5bar_20-0mA/P-001/piv/config_piv_full.toml")
-    print(run_dir)
-    raise SystemExit(0)
+    run()

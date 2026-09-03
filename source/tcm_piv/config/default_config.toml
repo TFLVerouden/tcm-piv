@@ -26,6 +26,9 @@ nr_passes = 1
 image_dir = ""
 # (Relative) path to the directory where all processed data and results will be saved
 output_dir = ""
+# When true, write results directly into `output_dir` instead of creating
+# `output_dir/runs/<run_id>/`.
+overwrite_runs = false
 # The word "all", a list of frame numbers, or [start, end] (inclusive range)
 frames_to_use = "all"
 
