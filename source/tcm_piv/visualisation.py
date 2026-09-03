@@ -496,6 +496,9 @@ def export_velocity_profiles_pdf(
     else:
         raise ValueError("flow_direction must be 'x' or 'y'")
 
+    velocity_limit = (float(np.nanmin(np.abs(vel_final))),
+                      float(np.nanmax(np.abs(vel_final))))
+
     if len(time_s) < n_pairs:
         raise ValueError("time_s must have length >= n_pairs")
 
@@ -546,6 +549,7 @@ def export_velocity_profiles_pdf(
     distance_profile_m = np.nanmean(distances_m, axis=collapse_axis)
     sort_indices = np.argsort(distance_profile_m)
     distance_profile_m = distance_profile_m[sort_indices]
+    distance_profile_mm = distance_profile_m * 1000.0
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output_path) as pdf:
@@ -562,16 +566,18 @@ def export_velocity_profiles_pdf(
                 interpolated_columns = np.any(
                     interpolated_mask[pair_i, :, :], axis=collapse_axis)[sort_indices]
 
-            fig, ax = plt.subplots(figsize=(6.5, 6.5))
-            ax.plot(stream, distance_profile_m, "-o",
+            fig, ax = plt.subplots(figsize=(5.8, 5.8))
+            ax.plot(stream, distance_profile_mm, "-o",
                     label=stream_label, markersize=3)
-            ax.plot(cross, distance_profile_m, "-o",
+            ax.plot(cross, distance_profile_mm, "-o",
                     label=cross_label, markersize=3)
+            ax.set_xlim(1.05 * velocity_limit[0], 1.05 * velocity_limit[1])
+            # ax.set_ylim(distance_profile_mm[0], distance_profile_mm[-1])
 
             if interpolated_columns is not None and np.any(interpolated_columns):
                 ax.plot(
                     stream[interpolated_columns],
-                    distance_profile_m[interpolated_columns],
+                    distance_profile_mm[interpolated_columns],
                     linestyle="none",
                     marker="x",
                     markersize=6,
@@ -580,8 +586,9 @@ def export_velocity_profiles_pdf(
                 )
 
             ax.set_xlabel("Velocity (m/s)")
-            ax.set_ylabel("Distance from centre (m)")
-            ax.set_title(f"Pair {pair_i} (t={float(time_s[pair_i]):.6g} s)")
+            ax.set_ylabel("Distance from centre (mm)")
+            ax.set_title(
+                f"Pair {pair_i} (t={float(time_s[pair_i]) * 1000.0:.2f} ms)")
             ax.grid(True, linestyle=":", alpha=0.6)
             ax.legend(loc="best")
 
