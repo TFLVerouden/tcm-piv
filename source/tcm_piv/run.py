@@ -532,12 +532,13 @@ def run(
             )
             disp_final = disp_nb
 
+        disp_final_presmooth: np.ndarray | None = None
         if time_smooth_lam and time_smooth_lam > 0:
             if disp_final.shape[0] >= 3 and disp_final.shape[1:3] == (1, 1):
                 print(
                     f"  temporal_smoothing: enabled (lambda={time_smooth_lam})"
                 )
-                disp_final_raw = disp_final.copy()
+                disp_final_presmooth = disp_final.copy()
                 disp_final = piv.smooth(
                     time_s,
                     disp_final,
@@ -545,20 +546,33 @@ def run(
                     dtype=int,
                 )
 
-                if pass_idx1 == 1:
-                    plots_dir = run_dir / "plots"
-                    viz.plot_temporal_displacements(
-                        time_s,
-                        disp_final_raw,
-                        disp_final,
-                        title=f"Pass {pass_idx1} displacements: raw vs smoothed (lambda={time_smooth_lam})",
-                        output_path=plots_dir
-                        / "displacements"
-                        / f"pass_{pass_idx1:02d}_temporal_smoothing.png",
-                    )
+        # Single-window passes: always plot the (unaveraged) displacement
+        # time series, since there is only one value per pair and no
+        # meaningful median/quantile to take across windows.
+        if disp_final.shape[1:3] == (1, 1):
+            plots_dir = run_dir / "plots"
+            if disp_final_presmooth is not None:
+                raw_for_plot = disp_final_presmooth
+                raw_label, final_label = "Raw", "Smoothed"
+                title = f"Pass {pass_idx1} displacements: raw vs smoothed (lambda={time_smooth_lam})"
+            else:
+                raw_for_plot = disp_global
+                raw_label, final_label = "Before neighbour filter", "Final"
+                title = f"Pass {pass_idx1} displacements"
+            viz.plot_temporal_displacements(
+                time_s,
+                raw_for_plot,
+                disp_final,
+                title=title,
+                raw_label=raw_label,
+                final_label=final_label,
+                output_path=plots_dir
+                / "displacements"
+                / f"pass_{pass_idx1:02d}_temporal_displacements.png",
+            )
 
         # For multi-window passes, summarize displacements over windows per timestamp.
-        if disp_final.ndim == 4 and disp_final.shape[-1] == 2 and disp_final.shape[1:3] != (1, 1):
+        elif disp_final.ndim == 4 and disp_final.shape[-1] == 2:
             plots_dir = run_dir / "plots"
             viz.plot_temporal_displacement_quantiles(
                 time_s,
@@ -841,8 +855,16 @@ def _neighbour_filter_strategy(
 
 
 if __name__ == "__main__":
-    # Local/dev convenience: hardcode a config for quick manual testing.
-    # Keep `run()` itself as a callable API.
-    run_dir = run(config_file="examples\image_pair\input\config_image_pair_tijn.toml")
+    parser = argparse.ArgumentParser(description="Run the tcm-piv pipeline.")
+    parser.add_argument("config_file", nargs="?", help="Path to a TOML config file.")
+    parser.add_argument("resume_run_dir", nargs="?", help="Existing run directory to resume into.")
+    parser.add_argument("--start-pass", type=int, default=1, help="1-based pass index to start at when resuming.")
+    args = parser.parse_args()
+
+    run_dir = run(
+        config_file=args.config_file,
+        resume_run_dir=args.resume_run_dir,
+        start_pass_1b=args.start_pass,
+    )
     print(run_dir)
     raise SystemExit(0)

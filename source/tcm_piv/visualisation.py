@@ -45,14 +45,18 @@ def plot_temporal_displacements(
     disp_smoothed: np.ndarray,
     *,
     title: str | None = None,
+    raw_label: str = "Raw",
+    final_label: str = "Smoothed",
     output_path: Path | None = None,
 ) -> tuple[Figure, tuple[Axes, Axes]]:
-    """Plot temporal displacements (dy, dx) as raw points + smoothed curve.
+    """Plot temporal displacements (dy, dx) as raw points + a final curve.
 
     Notes:
     - Intended for the single-window case (n_windows=(1,1)) where displacements
       represent a single time-series.
     - `disp_*` are expected in (dy_px, dx_px) order.
+    - `raw_label`/`final_label` let callers describe what the two series
+      represent when there is no temporal smoothing involved.
     """
 
     t = np.asarray(time_s).reshape(-1)
@@ -84,9 +88,9 @@ def plot_temporal_displacements(
         s=12,
         color="0.35",
         alpha=0.6,
-        label="Raw",
+        label=raw_label,
     )
-    ax_dy.plot(t_ms, dy_sm, color="tab:blue", linewidth=2.0, label="Smoothed")
+    ax_dy.plot(t_ms, dy_sm, color="tab:blue", linewidth=2.0, label=final_label)
     ax_dy.set_ylabel("dy (px)")
     ax_dy.grid(True, linestyle=":", alpha=0.5)
     ax_dy.legend(loc="upper right")
@@ -97,10 +101,10 @@ def plot_temporal_displacements(
         s=12,
         color="0.35",
         alpha=0.6,
-        label="Raw",
+        label=raw_label,
     )
     ax_dx.plot(t_ms, dx_sm, color="tab:orange",
-               linewidth=2.0, label="Smoothed")
+               linewidth=2.0, label=final_label)
     ax_dx.set_ylabel("dx (px)")
     ax_dx.set_xlabel("Time (ms)")
     ax_dx.grid(True, linestyle=":", alpha=0.5)
@@ -523,14 +527,23 @@ def export_velocity_profiles_pdf(
         plot=False,
     )
 
-    # Use x-centres for the "distance from centre" axis.
-    x_centres_px_ds = win_pos[..., 1]  # (n_y, n_x)
-    x_centres_px = x_centres_px_ds * downsample_factor
-    x_center_px = image_arr.shape[1] / 2.0
-    distances_m = (x_centres_px - x_center_px) * float(scale_m_per_px)
+    # The profile axis is the cross-stream direction; we collapse (average)
+    # over the streamwise window axis so the profile keeps its full
+    # cross-stream resolution instead of being flattened to a couple of points.
+    if flow_dir == "x":
+        centres_px_ds = win_pos[..., 0]  # y-centres, shape (n_y, n_x)
+        image_extent_px = image_arr.shape[0]
+        collapse_axis = 1  # average over x (streamwise) windows
+    else:
+        centres_px_ds = win_pos[..., 1]  # x-centres, shape (n_y, n_x)
+        image_extent_px = image_arr.shape[1]
+        collapse_axis = 0  # average over y (streamwise) windows
 
-    # Collapse y dimension: profile vs x index.
-    distance_profile_m = np.nanmean(distances_m, axis=0)  # (n_x,)
+    centres_px = centres_px_ds * downsample_factor
+    center_px = image_extent_px / 2.0
+    distances_m = (centres_px - center_px) * float(scale_m_per_px)
+
+    distance_profile_m = np.nanmean(distances_m, axis=collapse_axis)
     sort_indices = np.argsort(distance_profile_m)
     distance_profile_m = distance_profile_m[sort_indices]
 
@@ -538,15 +551,16 @@ def export_velocity_profiles_pdf(
     with PdfPages(output_path) as pdf:
         for pair_i in range(n_pairs):
             stream = np.nanmean(
-                vel_final[pair_i, :, :, stream_idx], axis=0)[sort_indices]
+                vel_final[pair_i, :, :, stream_idx], axis=collapse_axis)[sort_indices]
             cross = np.nanmean(
-                vel_final[pair_i, :, :, cross_idx], axis=0)[sort_indices]
+                vel_final[pair_i, :, :, cross_idx], axis=collapse_axis)[sort_indices]
 
             interpolated_columns = None
             if interpolated_mask is not None:
-                # Mark a column if any y-position in that column was interpolated.
+                # Mark a position if any streamwise sample at that cross-stream
+                # index was interpolated.
                 interpolated_columns = np.any(
-                    interpolated_mask[pair_i, :, :], axis=0)[sort_indices]
+                    interpolated_mask[pair_i, :, :], axis=collapse_axis)[sort_indices]
 
             fig, ax = plt.subplots(figsize=(6.5, 6.5))
             ax.plot(stream, distance_profile_m, "-o",
