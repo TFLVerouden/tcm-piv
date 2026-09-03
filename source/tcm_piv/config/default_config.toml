@@ -12,8 +12,10 @@
 # Notes:
 # - This file is packaged with the library and provides fallbacks.
 # - User configs override these values.
-# - Per-pass parameters (marked with *) may be a scalar (which will be broadcast)
-#   or a list of length `nr_passes`.
+# - Per-pass parameters (marked with *) must always be given as an array,
+#   either of length 1 (broadcast to every pass) or length `nr_passes`
+#   (one entry per pass) - e.g. `n_windows = [[4, 4]]` broadcasts, while
+#   `n_windows = [[4, 4], [8, 8]]` sets pass 1 and pass 2 separately.
 # - All "dir" parameters can be left empty "" to provide user with file picker.
 
 # How many times we refine the window size
@@ -46,33 +48,32 @@ background_dir = ""
 crop_roi = [0, 0, 0, 0]
 
 # *Sum pixels over squares of size (ds_factor x ds_factor)
-ds_factor = 1      # or [f1, f2, ...]
+ds_factor = [1]
 
 [correlation]
 # *Number of correlation maps (time steps) that will be summed before starting
 # peak detection. Fancy averaging in time, basically.
-n_corrs_to_sum = 1
+n_corrs_to_sum = [1]
 
 # *Number of interrogation windows as [n_y, n_x]
-n_windows = [1, 1]        # or [[n_y, n_x], [n_y2, n_x2], ...]
+n_windows = [[1, 1]]
 
 # *Overlap fraction between windows (0 means no overlap)
-window_overlap = 0.0       # 0..1
+window_overlap = [0.0]       # 0..1
 
 [displacement]
 # *Number of peaks to save (to have multiple candidates to work with)
-n_peaks = 1
+n_peaks = [1]
 
 # *Minimum distance between peaks (in pixels)
-min_peak_dist_px = 5
+min_peak_dist_px = [5]
 
 [postprocessing]
 # *Global outlier filter mode: "semicircle_rect" or "circle".
-# May be a scalar (broadcast to all passes) or a per-pass array.
-outlier_filter_mode = "semicircle_rect"
+outlier_filter_mode = ["semicircle_rect"]
 
 # *Max velocity components [vy, vx] to use for the filter (they are absolute!)
-max_velocity_vy_vx = [75.0, 10.0]
+max_velocity_vy_vx_m_s = [[75.0, 10.0]]
 
 # Which in-plane velocity component represents the flow direction: "x" or "y"
 flow_direction = "x"
@@ -82,18 +83,17 @@ extra_vel_dim_m = 0.01
 
 # *Size of neighbourhood to consider for local filtering
 # (time, y, x - includes itself as center point)
-nb_size_tyx = [1, 1, 1]
+nb_size_tyx = [[1, 1, 1]]
 
 # *How many standard deviations can a displacement be different from its neighbourhood
-nb_threshold = 1
+nb_threshold = [1]
 
 # *Smoothing parameter (larger = smoother). Works only on single window pass.
-time_smooth_lam = 0.0
+time_smooth_lam = [0.0]
 
 # *Size of neighbourhood to patch NaN holes (final pass interpolation)
-# (time, y, x - includes itself as center point)
-# Use "none" to disable interpolation entirely.
-interp_nb_size_tyx = [1, 1, 1]
+# (time, y, x - includes itself as center point). All dims == 1 disables it.
+interp_nb_size_tyx = [[1, 1, 1]]
 
 [visualisation]
 plot_model = false
@@ -102,6 +102,6 @@ model_mass = 70.0
 model_height = 1.93
 plot_global_filters = false
 plot_correlations = false
-plot_window_layout = false
+plot_window_layout = [false]
 plot_flow_rate = false
 export_velocity_profiles_pdf = false

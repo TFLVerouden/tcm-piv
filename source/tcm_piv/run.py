@@ -97,6 +97,7 @@ def run(
     # All result CSVs refer to images by *pair_index* (0-based), not by
     # embedding filenames in every row. `pairs.csv` is the lookup table.
     # This keeps large CSV outputs compact.
+
     # Step 2: Write pairs.csv (pair_index -> image filenames).
     pairs = [
         (
@@ -203,8 +204,7 @@ def run(
             imgs = np.asarray(load_images(
                 config.image_list, show_progress=True))
 
-            # TODO: check if image size matches config.camera metadata
-
+            # Step 4c: Pre-processing
             imgs = _apply_crop_and_background(imgs, config)
             imgs = denoise(imgs, lower_intensity=2, upper_intensity=4096,
                            shift_to_zero=True, reduce_dtype=True)
@@ -339,7 +339,7 @@ def run(
         if len(nb_size_tyx) != 3:
             raise ValueError(
                 f"nb_size_tyx must have 3 elements, got {nb_size_tyx}")
-        if interp_nb_size_tyx is not None and len(interp_nb_size_tyx) != 3:
+        if len(interp_nb_size_tyx) != 3:
             raise ValueError(
                 f"interp_nb_size_tyx must have 3 elements, got {interp_nb_size_tyx}")
 
@@ -438,7 +438,6 @@ def run(
         # Final pass: patch remaining NaN holes by interpolation
         if (
             pass_idx0 == config.nr_passes - 1
-            and interp_nb_size_tyx is not None
             and any(v > 1 for v in interp_nb_size_tyx)
             and np.isnan(disp_final).any()
         ):
@@ -652,7 +651,7 @@ def _apply_crop_and_background(imgs: np.ndarray, config: Config) -> np.ndarray:
     """Apply (optional) crop + background subtraction to 2D or 3D images."""
 
     out = imgs
-    if config.crop_roi != (0, 0, 0, 0):
+    if any(config.crop_roi):
         print(f"Cropping images to ROI: {config.crop_roi}")
         out = crop(out, config.crop_roi)
 
@@ -663,7 +662,7 @@ def _apply_crop_and_background(imgs: np.ndarray, config: Config) -> np.ndarray:
             raise RuntimeError(
                 f"Failed to read background image: {config.background_dir}")
 
-        if config.crop_roi != (0, 0, 0, 0):
+        if any(config.crop_roi):
             # Check if bg matches uncropped or cropped size
             h_in, w_in = imgs.shape[-2:]
             h_out, w_out = out.shape[-2:]
@@ -711,6 +710,7 @@ if __name__ == "__main__":
                         help="Path to a TOML config file.")
     args = parser.parse_args()
 
-    run_dir = run(config_file=args.config_file)
+    run_dir = run(
+        config_file="/Volumes/Data/PIV/260820_piv/step_1-5bar/260831_152310_step_1-5bar_20-0mA/P-001/piv/config_piv_full.toml")
     print(run_dir)
     raise SystemExit(0)

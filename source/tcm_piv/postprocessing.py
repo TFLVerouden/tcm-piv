@@ -221,7 +221,7 @@ def _validate_n_nbs(n_nbs: int | str | tuple[int, int, int], max_shape: tuple[in
         n_nbs = [n_nbs, n_nbs, n_nbs]
     elif isinstance(n_nbs, tuple):
         n_nbs = list(n_nbs)
-    else:
+    elif not isinstance(n_nbs, list) or len(n_nbs) != 3:
         raise ValueError(
             "n_nbs must be integer, 'all', or a tuple of three values (int or 'all').")
 
