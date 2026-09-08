@@ -1,4 +1,6 @@
 from __future__ import annotations
+import tcm_piv.visualisation as viz
+from tcm_utils.file_dialogs import ask_open_file
 
 import csv
 from pathlib import Path
@@ -6,8 +8,7 @@ import re
 
 import numpy as np
 
-import tcm_piv.visualisation as viz
-from tcm_utils.file_dialogs import ask_open_file
+from matplotlib import pyplot as plt
 
 # Timing constants
 TRIGGER_DELAY_MS = -10
@@ -16,23 +17,26 @@ OPENING_DELAY_MS = 15
 # Set interval to calculate average over
 START_BASE_MS = -5
 END_BASE_MS = 5
-START_STEP_MS = 55
+START_STEP_MS = 65
 END_STEP_MS = 95
+
+# Set the factor by which the flow must rise above the base average to be considered a step response
+RISE_FACTOR = 1.0
 
 # ==============================================================================
 # IMPORT AND SORT DATA FROM MANIFEST
 # ==============================================================================
-# manifest_path = ask_open_file(
-#     key="process_batch_manifest",
-#     title="Select the batch manifest CSV",
-#     filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
-#     default_dir=Path.cwd(),
-# )
+manifest_path = ask_open_file(
+    key="process_batch_manifest",
+    title="Select the PIV result CSV",
+    filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+    default_dir=Path.cwd(),
+)
 
-manifest_path = "/Volumes/Data/PIV/260820_piv/step_1-5bar/260831_152310_step_1-5bar_20-0mA/260903_223913_piv_result.csv"
+# manifest_path = "/Volumes/Data/PIV/260820_piv/step_1-5bar/260831_152310_step_1-5bar_20-0mA/260903_223913_piv_result.csv"
 
 if manifest_path is None:
-    raise RuntimeError("No manifest selected; aborting.")
+    raise RuntimeError("No PIV result CSV selected; aborting.")
 
 manifest_path = Path(manifest_path)
 if not manifest_path.is_file():
@@ -257,7 +261,7 @@ for index, ((label, time_s, flow_lps), run_log_path) in enumerate(
     diff_std = np.sqrt(base_std**2 + step_std**2)
 
     # Calculate the flow delay (aka the point in time where the flow rate first starts to rise)
-    delay = np.nanmin(time_s[flow_lps > (1.5*base_avg)]) * 1000
+    delay = np.nanmin(time_s[flow_lps > (RISE_FACTOR*base_avg)]) * 1000
     # delay = np.nanmin(time_s[flow_lps > (1.01*base_avg)]) * 1000
     flow_rows.append((label, base_avg, base_std, step_avg,
                      step_std, diff_avg, diff_std, delay, 0.0))
