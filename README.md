@@ -12,6 +12,11 @@ interpreted as a range.
 - Example config: [source/tcm_piv/config/config.toml](source/tcm_piv/config/config.toml)
 - Packaged defaults: [source/tcm_piv/config/default_config.toml](source/tcm_piv/config/default_config.toml)
 
+## How to run batch from terminal
+`cd /Users/tommieverouden/Developer/twente-cough-machine/analysis/piv`
+`source .venv/bin/activate`
+`python -m tcm_piv.run_batch`
+
 
 ## Todo
 - swap order of peak detection and global filter?

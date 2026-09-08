@@ -22,6 +22,7 @@ from tcm_utils.time_utils import timestamp_str
 from tcm_piv.run import run
 import tcm_piv.visualisation as viz
 from tcm_utils.file_dialogs import ask_directory, ask_open_file
+from tcm_utils.io_utils import beep
 
 
 def run_batch(
@@ -52,6 +53,10 @@ def run_batch(
     try:
         for video_dir in video_dirs:
             camera_file = _find_camera_file(video_dir)
+            if camera_file is None:
+                print(
+                    f"Skipping {video_dir} because no camera file was found.")
+                continue
             output_dir = video_dir / f"piv_run_{batch_run_id}"
             print(
                 f"================================================================================")
@@ -85,14 +90,15 @@ def run_batch(
                     str(flow_csv),
                     str(config_path),
                     batch_run_id,
+                    str(top_dir_path),
                 )
             )
 
-        manifest_path = top_dir_path / f"{batch_run_id}_flow_rate_manifest.csv"
+        manifest_path = top_dir_path / f"{batch_run_id}_piv_result.csv"
         _write_flow_rate_manifest(manifest_path, manifest_rows)
         print(f"\nBatch manifest: {manifest_path}")
 
-        plot_path = top_dir_path / f"{batch_run_id}_flow_rate_comparison.png"
+        plot_path = top_dir_path / f"{batch_run_id}_piv_result.pdf"
         viz.plot_flow_rate_series(
             flow_series,
             title=top_dir_path.name,
@@ -104,6 +110,7 @@ def run_batch(
     finally:
         elapsed_s = perf_counter() - batch_start_s
         print(f"Batch elapsed time: {elapsed_s:.1f} s")
+        beep()
 
 
 def _resolve_batch_directory(top_dir: str | Path | None) -> Path:
@@ -143,11 +150,12 @@ def _resolve_batch_config_file(config_file: str | Path | None) -> Path:
     return Path(selected_path)
 
 
-def _find_camera_file(video_dir: Path) -> Path:
+def _find_camera_file(video_dir: Path) -> Path | None:
     candidates = [p for p in natsorted(
         video_dir.rglob("*.cihx")) if p.is_file()]
     if not candidates:
-        raise FileNotFoundError(f"No .cihx file found in {video_dir}")
+        print(f"No .cihx file found in {video_dir}")
+        return None
     if len(candidates) > 1:
         print(
             f"Warning: found {len(candidates)} .cihx files in {video_dir}; using {candidates[0]}"
@@ -174,6 +182,7 @@ def _write_flow_rate_manifest(path: Path, rows: list[tuple[str, str, str, str, s
             "flow_rate_csv",
             "config_file",
             "batch_run_id",
+            "top_dir_path",
         ])
         writer.writerows(rows)
 

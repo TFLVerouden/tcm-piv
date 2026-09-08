@@ -408,6 +408,12 @@ def plot_flow_rate_series(
     *,
     title: str | None = None,
     output_path: Path | None = None,
+    interval1: tuple[float, float] | None = None,
+    interval2: tuple[float, float] | None = None,
+    interval1_label: str = "Interval 1",
+    interval2_label: str = "Interval 2",
+    vertical_lines: list[float] | None = None,
+    subtitle: str | None = None,
 ) -> tuple[Figure, Axes]:
     """Plot multiple flow-rate series on one set of axes."""
 
@@ -428,9 +434,26 @@ def plot_flow_rate_series(
 
     ax.set_xlabel("Time (ms)")
     ax.set_ylabel("Flow rate (L/s)")
-    ax.set_title(title or "Flow rate vs time")
+    fig.suptitle(title or "Flow rate vs time")
+    if subtitle:
+        ax.set_title(subtitle, fontsize="small")
+
     ax.grid(True, linestyle=":", alpha=0.5)
-    ax.legend(loc="upper right")
+    if interval1:
+        ax.axvspan(interval1[0] * 1000.0, interval1[1] * 1000.0,
+                   alpha=0.4, color="gray", label=interval1_label, linestyle="")
+    if interval2:
+        ax.axvspan(interval2[0] * 1000.0, interval2[1] * 1000.0,
+                   alpha=0.2, color="gray", label=interval2_label, linestyle="")
+    ax.legend(loc="lower right", fontsize="small", framealpha=0.8)
+
+    # Bottom y_lim should always be 0.0
+    y_min, y_max = ax.get_ylim()
+    ax.set_ylim(bottom=0.0, top=y_max)
+
+    if vertical_lines:
+        ax.vlines(vertical_lines, ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[
+                  1], colors="black")
 
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
