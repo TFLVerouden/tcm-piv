@@ -519,6 +519,7 @@ def run(
         time_rep = np.repeat(time_s[:n_pairs], n_wy * n_wx)
 
         vel_csv = run_dir / "velocity_final.csv"
+        # TODO: Save window locations, not just indices
         print(f"Writing: {vel_csv.name}")
         np.savetxt(
             vel_csv,
