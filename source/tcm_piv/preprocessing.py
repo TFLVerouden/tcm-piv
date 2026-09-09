@@ -8,11 +8,14 @@ including downsampling and splitting images into interrogation windows.
 import os
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 
 import numpy as np
 import matplotlib
 import cv2 as cv
 from tcm_piv.utils import reduce_bits
+from tcm_utils.file_dialogs import ask_open_file
+from tcm_utils.io_utils import load_image
 
 # Default to a non-interactive backend to avoid Tk/Tkinter teardown issues
 # when the pipeline uses worker threads. Users can override by setting the
@@ -650,3 +653,31 @@ def split_n_shift(img: np.ndarray, n_windows: tuple[int, int], overlap: float = 
             title=f"{n_y}x{n_x} windows {shift_mode} shift ({100*overlap:.0f}% ov.)", xlabel='x', ylabel='y')
 
     return windows, win_pos
+
+
+if __name__ == "__main__":
+    # Variables
+    CROP_ROI = (59, -59, 0, 0)
+    NR_WINS = (20, 1)
+    WIN_OVERLAP = 0.25
+
+    # Open a single image
+    # test_img = ask_open_file(key="test_split_n_shift",
+    #                          title="Select a test image for split_n_shift")
+    test_img = Path(
+        "/Volumes/Data/PIV/260820_piv/step_1-5bar/260831_152310_step_1-5bar_20-0mA/P-001/P-001_20260831_165049000001.tif")
+    if test_img is None:
+        raise RuntimeError(
+            "No test image selected. Please select an image to proceed.")
+    test_img = load_image(test_img)
+
+    # Crop
+    cropped_img = crop(test_img, CROP_ROI)
+
+    # Split into windows
+    windows, win_pos = split_n_shift(cropped_img, NR_WINS,
+                                     overlap=WIN_OVERLAP, plot=False)
+
+    # Print window positions as numpy array that can be hardcoded in a script
+    print("Window positions (y, x):")
+    print(win_pos)
