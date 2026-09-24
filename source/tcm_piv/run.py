@@ -520,6 +520,7 @@ def run(
 
         vel_csv = run_dir / "velocity_final.csv"
         # TODO: Save window locations, not just indices
+        # TODO: Save config again as metadata
         print(f"Writing: {vel_csv.name}")
         np.savetxt(
             vel_csv,

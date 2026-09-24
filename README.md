@@ -14,7 +14,9 @@ interpreted as a range.
 
 ## How to run batch from terminal
 `cd /Users/tommieverouden/Developer/twente-cough-machine/analysis/piv`
+
 `source .venv/bin/activate`
+
 `python -m tcm_piv.run_batch`
 
 
