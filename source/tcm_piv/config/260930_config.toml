@@ -1,0 +1,49 @@
+nr_passes = 3
+
+[source]
+image_dir = ""
+output_dir = ""
+frames_to_use = "all"
+
+[camera]
+camera_dir = ""
+calib_dir = "/Volumes/Data/PIV/260820_piv/calibration/processed/calibration_500um_1000001_260828_164450_metadata.json"
+calib_spacing_mm = 0.5
+
+[preprocessing]
+background_dir = "none"
+crop_roi = [59, -59, 0, 0]
+ds_factor = [1, 1, 1]
+denoise_blur_sigma = 32
+denoise_lower_int = 2
+denoise_upper_int = 255
+
+[correlation]
+n_corrs_to_sum = [20, 20, 20]
+n_windows = [[1, 1], [10, 1], [20, 1]]
+window_overlap = [0.0, 0.0, 0.25]
+
+[displacement]
+n_peaks = [5]
+min_peak_dist_px = [1]
+
+[postprocessing]
+outlier_filter_mode = ["semicircle_rect"]
+max_velocity_vy_vx_m_s = [[10.0, 75.0]]
+flow_direction = "x"
+extra_vel_dim_m = 0.01
+nb_size_tyx = [[1, 1, 1]]
+nb_threshold = [5]
+time_smooth_lam = [0.0]
+interp_nb_size_tyx = [[1,1,1]]
+
+[visualisation]
+plot_model = false
+model_gender = "male"
+model_mass = 70.0
+model_height = 1.93
+plot_global_filters = true
+plot_correlations = false
+plot_window_layout = [true]
+plot_flow_rate = true
+export_velocity_profiles_pdf = false

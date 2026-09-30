@@ -66,6 +66,10 @@ class Config:
                 return value[name]
         raise AttributeError(f"Config has no field {name!r}")
 
+    def dict(self) -> dict[str, Any]:
+        """Return a deep copy of the underlying config dict."""
+        return deepcopy(self._data)
+
 
 def load_config(
     config_file: Path | str | None,

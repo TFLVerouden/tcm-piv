@@ -28,6 +28,8 @@ class PassPaths:
     pass_dir: Path
     post_csv: Path
     meta_json: Path
+    win_pos_csv: Path
+    win_pos_plot: Path
 
 
 def init_run_dir(output_dir: Path, run_id: str, *, overwrite_runs: bool = False) -> Path:
@@ -52,12 +54,27 @@ def pass_paths(run_dir: Path, pass_index_1b: int) -> PassPaths:
         pass_dir=pass_dir,
         post_csv=pass_dir / f"pass_{pass_index_1b:02d}_post.csv",
         meta_json=pass_dir / f"pass_{pass_index_1b:02d}_meta.json",
+        win_pos_csv=pass_dir / f"pass_{pass_index_1b:02d}_win_pos.csv",
+        win_pos_plot=pass_dir / f"pass_{pass_index_1b:02d}_win_pos.png"
     )
 
 
 def write_meta_json(path: Path, meta: dict[str, Any]) -> None:
-    path.write_text(json.dumps(meta, indent=2, sort_keys=True),
-                    encoding="utf-8")
+    # First convert all PosixPath objects to strings, since JSON doesn't support them natively
+    def _convert_paths(obj: Any) -> Any:
+        if isinstance(obj, dict):
+            return {k: _convert_paths(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [_convert_paths(v) for v in obj]
+        elif isinstance(obj, Path):
+            return str(obj)
+        else:
+            return obj
+
+    meta = _convert_paths(meta)
+
+    with open(path, "w", encoding="utf-8") as fp:
+        json.dump(meta, fp, indent=2, sort_keys=True)
 
 
 def write_postprocessed_csv(

@@ -336,7 +336,7 @@ def plot_window_layout(
     shift_mode: str = "before",
     title: str | None = None,
     output_path: Path | None = None,
-) -> tuple[Figure, Axes]:
+) -> np.ndarray:
     """Plot window rectangles using the exact logic from `split_n_shift`.
 
     Notes:
@@ -355,7 +355,7 @@ def plot_window_layout(
             shift_arg = shifts
 
     # `split_n_shift(plot=True)` creates its own figure/axes.
-    split_n_shift(
+    _, win_pos = split_n_shift(
         np.asarray(image),
         n_windows,
         overlap=float(overlap),
@@ -373,7 +373,7 @@ def plot_window_layout(
         fig.savefig(output_path, dpi=200)
         plt.close(fig)
 
-    return fig, ax
+    return win_pos
 
 
 def plot_flow_rate(

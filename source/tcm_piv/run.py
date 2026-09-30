@@ -478,15 +478,34 @@ def run(
             disp_final = disp_patched
 
         if plot_windows:
-            window_layouts.append({
-                "pass": pass_idx1,
-                "n_windows": (n_win_y, n_win_x),
-                "overlap": overlap,
-                "shifts": shifts,
-            })
+            win_pos_avg = viz.plot_window_layout(
+                imgs[0],
+                (n_win_y, n_win_x),
+                overlap=overlap,
+                shifts=shifts,
+                shift_mode="before",
+                title=f"Pass {pass_idx1:02d} windows",
+                output_path=paths.win_pos_plot,
+            )
+
+            # Convert the window positions to meters, centre the cross-stream direction
+            win_pos_mm = win_pos_avg.copy() * config.scale_m_per_px * 1000
+            if str(config.flow_direction).strip().lower() == "y":
+                win_pos_mm[:, :, 1] -= np.mean(win_pos_mm[:, :, 1])
+            else:
+                win_pos_mm[:, :, 0] -= np.mean(win_pos_mm[:, :, 0])
+
+            # Write the window positions to a CSV file in the pass folder
+            np.savetxt(
+                paths.win_pos_csv,
+                win_pos_mm.reshape(-1, 2),
+                delimiter=",",
+                header=("win_y_mm,win_x_mm"),
+            )
 
         if pass_idx0 == config.nr_passes - 1:
             disp_final_lastpass = disp_final
+            win_pos_lastpass = win_pos_mm
 
         print(f"Writing pass results: {paths.post_csv.name}")
         write_postprocessed_csv(
@@ -520,6 +539,12 @@ def run(
         win_y = np.tile(
             np.repeat(np.arange(n_wy, dtype=np.int64), n_wx), n_pairs)
         win_x = np.tile(np.arange(n_wx, dtype=np.int64), n_pairs * n_wy)
+
+        # Repeat the actual window positions of the last pass in the same manner
+        win_y_mm = np.tile(
+            np.repeat(win_pos_lastpass[:, :, 0].reshape(-1), 1), n_pairs)
+        win_x_mm = np.tile(
+            np.repeat(win_pos_lastpass[:, :, 1].reshape(-1), 1), n_pairs)
         time_rep = np.repeat(time_s[:n_pairs], n_wy * n_wx)
 
         vel_csv = run_dir / "velocity_final.csv"
@@ -534,14 +559,16 @@ def run(
             vel_csv,
             np.column_stack([
                 pair_index,
-                win_y,
-                win_x,
                 time_rep,
+                win_y,
+                win_y_mm,
+                win_x,
+                win_x_mm,
                 vel_final[..., 0].reshape(-1),
                 vel_final[..., 1].reshape(-1),
             ]),
             delimiter=",",
-            header="pair_index,win_y,win_x,time_s,vy_m_s,vx_m_s",
+            header="pair_index,time_s,win_y,win_y_mm,win_x,win_x_mm,vy_m_s,vx_m_s",
             comments="",
         )
 
@@ -585,31 +612,7 @@ def run(
                 output_path=plots_dir / "filter_ranges.png",
             )
 
-        image_for_plots: np.ndarray | None = None
-        if window_layouts or config.export_velocity_profiles_pdf:
-            if imgs is not None:
-                image_for_plots = np.asarray(imgs[0])
-            else:
-                base = load_images([config.image_list[0]], show_progress=False)
-                image_for_plots = np.asarray(base[0])
-                image_for_plots = _apply_crop_and_background(
-                    image_for_plots, config)
-
-        if window_layouts and image_for_plots is not None:
-            print("Plotting: window layouts")
-            for layout in window_layouts:
-                viz.plot_window_layout(
-                    image_for_plots,
-                    layout["n_windows"],
-                    overlap=float(layout.get("overlap", 0.0)),
-                    shifts=layout.get("shifts"),
-                    shift_mode="before",
-                    title=f"Pass {layout['pass']:02d} windows",
-                    output_path=plots_dir /
-                    f"pass_{layout['pass']:02d}_windows.png",
-                )
-
-        if config.export_velocity_profiles_pdf and image_for_plots is not None:
+        if config.export_velocity_profiles_pdf and imgs is not None:
             print("Exporting: velocity_profiles.pdf")
             final_pass_i = int(config.nr_passes) - 1
             n_wins_final = config.n_windows[final_pass_i]
@@ -618,7 +621,7 @@ def run(
             viz.export_velocity_profiles_pdf(
                 vel_final=vel_final,
                 interpolated_mask=interp_filled_mask,
-                image=image_for_plots,
+                image=imgs[0],
                 n_windows=(int(n_wins_final[0]), int(n_wins_final[1])),
                 overlap=overlap_final,
                 ds_factor=ds_factor_final,
@@ -725,4 +728,4 @@ def _neighbour_filter_strategy(
 
 
 if __name__ == "__main__":
-    run()
+    run(config_file="/Users/tommieverouden/Developer/twente-cough-machine/analysis/piv/source/tcm_piv/config/260930_test.toml")
