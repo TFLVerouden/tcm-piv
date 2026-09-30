@@ -548,8 +548,6 @@ def run(
         time_rep = np.repeat(time_s[:n_pairs], n_wy * n_wx)
 
         vel_csv = run_dir / "velocity_final.csv"
-        # TODO: Save window locations, not just indices
-        # TODO: Save config again as metadata
 
         # Write final config metadata to the run directory
         write_meta_json(run_dir / "metadata.json", config.dict())

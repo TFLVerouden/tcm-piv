@@ -84,6 +84,7 @@ def run_batch(
             grouped_series: list[
                 tuple[str, np.ndarray, np.ndarray, np.ndarray]
             ] = []
+            grouped_velocity: list[tuple[str, dict[str, np.ndarray]]] = []
 
             for video_dir in group_dirs:
                 camera_file = _find_camera_file(video_dir)
@@ -117,6 +118,14 @@ def run_batch(
                     flow_csv)
                 grouped_series.append(
                     (video_dir.name, pair_index, time_s, flow_ls))
+                velocity_csv = run_dir / "velocity_final.csv"
+                if velocity_csv.is_file():
+                    grouped_velocity.append(
+                        (video_dir.name, _read_velocity_csv(velocity_csv))
+                    )
+                else:
+                    print(
+                        f"Warning: {velocity_csv} not found; excluded from velocity stitch.")
                 group_run_rows.append(
                     (
                         video_dir.name,
@@ -147,6 +156,18 @@ def run_batch(
             )
             _write_stitched_flow_rate_csv(stitched_flow_path, stitched_rows)
             print(f"Batch stitched flow data: {stitched_flow_path}")
+
+            if grouped_velocity:
+                vel_header, vel_rows = _stitch_velocity_series(
+                    grouped_velocity)
+                stitched_velocity_path = (
+                    top_dir_path /
+                    f"{batch_run_id}_{group_key}_stitched_velocity.csv"
+                )
+                _write_stitched_velocity_csv(
+                    stitched_velocity_path, vel_header, vel_rows)
+                print(
+                    f"Batch stitched velocity data: {stitched_velocity_path}")
 
             # Retain one batch-wide manifest, as in the original version.
             manifest_rows.extend(group_run_rows)
@@ -254,6 +275,15 @@ def _read_flow_rate_csv(
     )
 
 
+def _read_velocity_csv(velocity_csv: Path) -> dict[str, np.ndarray]:
+    """Read velocity_final.csv into a dict of column name -> 1D array."""
+    data = np.genfromtxt(velocity_csv, delimiter=",", names=True)
+    if data.size == 0:
+        raise RuntimeError(f"No data found in {velocity_csv}")
+    data = np.atleast_1d(data)
+    return {name: np.asarray(data[name]) for name in data.dtype.names}
+
+
 def _stitch_flow_rate_series(
     series: list[tuple[str, np.ndarray, np.ndarray, np.ndarray]],
 ) -> tuple[np.ndarray, np.ndarray, list[tuple[str, int, int, float, float, float]]]:
@@ -313,6 +343,73 @@ def _stitch_flow_rate_series(
     )
 
 
+def _stitch_velocity_series(
+    series: list[tuple[str, dict[str, np.ndarray]]],
+) -> tuple[list[str], list[tuple]]:
+    """Append velocity tables in order, offsetting time_s and pair_index.
+
+    Returns (header, rows). Extra columns (win_y, vy_m_s, ...) pass through
+    unchanged.
+    """
+    rows: list[tuple] = []
+    header: list[str] | None = None
+
+    time_offset = 0.0
+    last_step: float | None = None
+    pair_offset = 0
+    started = False
+
+    for label, cols in series:
+        pair = np.asarray(cols["pair_index"]).reshape(-1)
+        t = np.asarray(cols["time_s"]).reshape(-1)
+        if pair.size == 0:
+            continue
+
+        other_names = [n for n in cols if n not in ("pair_index", "time_s")]
+        if header is None:
+            header = [
+                "source_subfolder",
+                "source_pair_index",
+                "stitched_pair_index",
+                "time_s",
+                *other_names,
+            ]
+
+        # Time per pair (each pair repeats over its window rows)
+        unique_t = np.unique(t)
+        local_t = t - unique_t[0] + (time_offset if started else 0.0)
+        # Map source pair_index -> consecutive 0..n-1, then shift
+        unique_pairs, inverse = np.unique(pair, return_inverse=True)
+        stitched_pair = inverse + pair_offset
+
+        for i in range(pair.size):
+            rows.append(
+                (
+                    label,
+                    int(pair[i]),
+                    int(stitched_pair[i]),
+                    float(local_t[i]),
+                    *(float(cols[n][i]) for n in other_names),
+                )
+            )
+
+        local_unique_t = unique_t - \
+            unique_t[0] + (time_offset if started else 0.0)
+        step = _estimate_time_step(local_unique_t, fallback=last_step)
+        if step is not None:
+            last_step = step
+            time_offset = float(local_unique_t[-1] + step)
+        else:
+            time_offset = float(local_unique_t[-1])
+
+        pair_offset += unique_pairs.size
+        started = True
+
+    if header is None:
+        raise RuntimeError("No velocity data was available to stitch")
+    return header, rows
+
+
 def _estimate_time_step(time_s: np.ndarray, *, fallback: float | None = None) -> float | None:
     t = np.asarray(time_s).reshape(-1)
     if t.size < 2:
@@ -342,6 +439,14 @@ def _write_stitched_flow_rate_csv(
             "flow_rate_m3_s",
             "flow_rate_L_s",
         ])
+        writer.writerows(rows)
+
+
+def _write_stitched_velocity_csv(path: Path, header: list[str], rows: list[tuple]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as fp:
+        writer = csv.writer(fp)
+        writer.writerow(header)
         writer.writerows(rows)
 
 
@@ -382,9 +487,17 @@ def stitch_existing_batch(
         grouped_series: list[
             tuple[str, np.ndarray, np.ndarray, np.ndarray]
         ] = []
+        grouped_velocity: list[tuple[str, dict[str, np.ndarray]]] = []
 
         for video_dir in group_dirs:
             flow_csv = video_dir / f"piv_run_{batch_run_id}" / "flow_rate.csv"
+            velocity_csv = video_dir / \
+                f"piv_run_{batch_run_id}" / "velocity_final.csv"
+            if velocity_csv.is_file():
+                grouped_velocity.append(
+                    (video_dir.name, _read_velocity_csv(velocity_csv)))
+            else:
+                print(f"Warning: missing velocity file: {velocity_csv}")
 
             if not flow_csv.is_file():
                 print(f"Skipping missing flow file: {flow_csv}")
@@ -409,6 +522,14 @@ def stitch_existing_batch(
         )
         _write_stitched_flow_rate_csv(stitched_path, stitched_rows)
         output_paths.append(stitched_path)
+
+        if grouped_velocity:
+            vel_header, vel_rows = _stitch_velocity_series(grouped_velocity)
+            vel_path = top_dir_path / \
+                f"{batch_run_id}_{group_key}_restitched_velocity.csv"
+            _write_stitched_velocity_csv(vel_path, vel_header, vel_rows)
+            output_paths.append(vel_path)
+            print(f"Restitched velocity data: {vel_path}")
 
         stitched_flow_series.append(
             (group_key.upper(), stitched_time_s, stitched_flow_ls)
@@ -448,7 +569,7 @@ def _write_flow_rate_manifest(path: Path, rows: list[tuple[str, str, str, str, s
 
 
 def main() -> None:
-    stitch_existing_batch(batch_run_id="260914_132007")
+    run_batch()
 
 
 if __name__ == "__main__":
