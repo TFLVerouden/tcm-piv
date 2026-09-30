@@ -208,6 +208,10 @@ def run(
             },
         }
 
+        # Write pass metadata
+        print(f"Writing pass metadata: {paths.meta_json.name}")
+        write_meta_json(paths.meta_json, meta)
+
         # Step 4b: Load images once (only if we need to compute correlations).
         if imgs is None:
 
@@ -521,6 +525,10 @@ def run(
         vel_csv = run_dir / "velocity_final.csv"
         # TODO: Save window locations, not just indices
         # TODO: Save config again as metadata
+
+        # Write final config metadata to the run directory
+        write_meta_json(run_dir / "metadata.json", config.dict())
+
         print(f"Writing: {vel_csv.name}")
         np.savetxt(
             vel_csv,
